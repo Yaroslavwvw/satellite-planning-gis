@@ -1,0 +1,2 @@
+-- Reference seed notes.
+-- Keep seed scripts here if needed for local development in next iterations.

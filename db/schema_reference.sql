@@ -1,0 +1,10 @@
+-- Reference schema notes for existing PostgreSQL/PostGIS database
+-- Existing tables:
+-- satellites
+-- tle_records
+-- sensors
+-- sensor_bands
+-- aois
+-- calculation_runs
+-- calculation_run_satellites
+-- observation_windows
