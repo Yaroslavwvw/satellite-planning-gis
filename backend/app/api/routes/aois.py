@@ -20,8 +20,13 @@ def create_aoi(payload: AOICreate, db: Session = Depends(get_db)):
     if geometry_obj.geom_type != "Polygon":
         raise HTTPException(status_code=400, detail="Only Polygon AOI is supported in this prototype")
 
-    aoi = AOI(name=payload.name, geom=from_shape(geometry_obj, srid=4326))
+    aoi = AOI(
+        name=payload.name,
+        geometry=from_shape(geometry_obj, srid=4326),
+    )
+
     db.add(aoi)
     db.commit()
     db.refresh(aoi)
+
     return aoi

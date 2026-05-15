@@ -1,7 +1,6 @@
 from datetime import datetime
 
-from geoalchemy2 import Geometry
-from sqlalchemy import DateTime, ForeignKey, Integer
+from sqlalchemy import BigInteger, DateTime, ForeignKey, Integer, Numeric
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
@@ -10,11 +9,36 @@ from app.core.database import Base
 class ObservationWindow(Base):
     __tablename__ = "observation_windows"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    calculation_run_id: Mapped[int] = mapped_column(ForeignKey("calculation_runs.id"), nullable=False, index=True)
-    satellite_id: Mapped[int] = mapped_column(ForeignKey("satellites.id"), nullable=False, index=True)
-    start_time: Mapped[datetime] = mapped_column(DateTime, nullable=False)
-    end_time: Mapped[datetime] = mapped_column(DateTime, nullable=False)
-    track_geom: Mapped[object | None] = mapped_column(Geometry("LINESTRING", srid=4326), nullable=True)
+    window_id: Mapped[int] = mapped_column(BigInteger, primary_key=True, index=True)
+    calculation_run_id: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey("calculation_runs.calculation_run_id"),
+        nullable=False,
+        index=True,
+    )
+    satellite_id: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey("satellites.satellite_id"),
+        nullable=False,
+        index=True,
+    )
+    sensor_id: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey("sensors.sensor_id"),
+        nullable=False,
+        index=True,
+    )
+    aoi_id: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey("aois.aoi_id"),
+        nullable=False,
+        index=True,
+    )
+    access_start: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    access_end: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    duration_sec: Mapped[int] = mapped_column(Integer, nullable=False)
+    max_elevation_deg: Mapped[float | None] = mapped_column(Numeric(6, 3), nullable=True)
+    off_nadir_deg: Mapped[float | None] = mapped_column(Numeric(6, 3), nullable=True)
+    observation_score: Mapped[float | None] = mapped_column(Numeric(8, 3), nullable=True)
 
     calculation_run = relationship("CalculationRun", back_populates="observation_windows")

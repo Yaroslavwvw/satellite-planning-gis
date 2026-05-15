@@ -1,37 +1,51 @@
-from datetime import date, datetime
+from datetime import datetime
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class CalculationCreate(BaseModel):
     aoi_id: int
-    period_start: date
-    period_end: date
+    period_start: datetime
+    period_end: datetime
+    step_seconds: int = Field(default=60, gt=0)
+    mode: str = Field(default="all_catalog")
     satellite_ids: list[int] = Field(default_factory=list)
+
+    @field_validator("mode")
+    @classmethod
+    def validate_mode(cls, mode: str):
+        if mode not in {"all_catalog", "selected"}:
+            raise ValueError("mode must be 'all_catalog' or 'selected'")
+        return mode
 
     @field_validator("period_end")
     @classmethod
-    def validate_period(cls, period_end: date, info):
+    def validate_period(cls, period_end: datetime, info):
         period_start = info.data.get("period_start")
+
         if period_start is None:
             return period_end
-        if period_end < period_start:
-            raise ValueError("period_end must be greater or equal to period_start")
+
+        if period_end <= period_start:
+            raise ValueError("period_end must be greater than period_start")
+
         if (period_end - period_start).days > 7:
             raise ValueError("calculation period must not exceed 7 days")
+
         return period_end
 
 
 class CalculationRead(BaseModel):
-    id: int
+    calculation_run_id: int
     aoi_id: int
-    period_start: date
-    period_end: date
+    period_start: datetime
+    period_end: datetime
+    step_seconds: int
+    mode: str
     status: str
     created_at: datetime
-    result_payload: dict | None = None
 
-    model_config = {"from_attributes": True}
+    model_config = ConfigDict(from_attributes=True)
 
 
 class CalculationPlaceholderResponse(BaseModel):
