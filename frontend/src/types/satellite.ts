@@ -1,14 +1,24 @@
-export interface Satellite {
-  id: number
-  name: string
-  norad_id: number
-  is_active: boolean
-}
-
-export interface Sensor {
-  id: number
+export type Satellite = {
   satellite_id: number
   name: string
-  swath_km?: number
-  resolution_m?: number
+  norad_id: number
+  object_id: string | null
+  country: string | null
+  mission_type: string
+  orbit_type: string | null
+  inclination_deg: number | null
+  orbital_period_min: number | null
+  avg_altitude_km: number | null
+  description: string | null
+}
+
+export type Sensor = {
+  sensor_id: number
+  satellite_id: number
+  name: string
+  sensor_type: string
+  swath_km: number | null
+  off_nadir_max_deg: number | null
+  retarget_time_sec: number | null
+  notes: string | null
 }

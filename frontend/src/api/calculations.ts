@@ -1,12 +1,28 @@
 import { apiClient } from './client'
-import type { CalculationRequest, CalculationRun } from '../types/calculation'
+import type {
+  CalculationPlaceholderResponse,
+  CalculationRequest,
+  CalculationResultResponse,
+  CalculationRun,
+} from '../types/calculation'
 
-export async function createCalculation(payload: CalculationRequest) {
-  const { data } = await apiClient.post('/api/calculations', payload)
+export async function createCalculation(
+  payload: CalculationRequest,
+): Promise<CalculationPlaceholderResponse> {
+  const { data } = await apiClient.post<CalculationPlaceholderResponse>('/api/calculations', payload)
   return data
 }
 
 export async function fetchCalculation(calculationId: number): Promise<CalculationRun> {
   const { data } = await apiClient.get<CalculationRun>(`/api/calculations/${calculationId}`)
+  return data
+}
+
+export async function fetchCalculationResults(
+  calculationId: number,
+): Promise<CalculationResultResponse> {
+  const { data } = await apiClient.get<CalculationResultResponse>(
+    `/api/calculations/${calculationId}/results`,
+  )
   return data
 }
