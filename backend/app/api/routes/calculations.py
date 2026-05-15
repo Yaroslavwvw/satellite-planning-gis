@@ -1,4 +1,5 @@
 from datetime import timedelta
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -7,14 +8,16 @@ from app.core.database import get_db
 from app.models.aoi import AOI
 from app.models.calculation_run import CalculationRun
 from app.models.calculation_run_satellite import CalculationRunSatellite
-from app.models.satellite import Satellite
-from app.models.tle_record import TLERecord
 from app.models.observation_window import ObservationWindow
+from app.models.satellite import Satellite
 from app.models.sensor import Sensor
+from app.models.tle_record import TLERecord
 from app.schemas.calculation import (
     CalculationCreate,
     CalculationPlaceholderResponse,
     CalculationRead,
+    CalculationResultResponse,
+    ObservationWindowRead,
 )
 
 router = APIRouter(prefix="/api/calculations", tags=["calculations"])
@@ -80,6 +83,7 @@ def create_calculation(payload: CalculationCreate, db: Session = Depends(get_db)
                 included_manually=(payload.mode == "selected"),
             )
         )
+
         sensor = db.scalar(
             select(Sensor)
             .where(Sensor.satellite_id == satellite.satellite_id)
@@ -120,8 +124,8 @@ def create_calculation(payload: CalculationCreate, db: Session = Depends(get_db)
 
     placeholder = {
         "status": "placeholder",
-        "summary": "Calculation run created. Full SGP4 visibility calculation will be added next.",
-        "windows": [],
+        "summary": "Calculation run created. Temporary observation windows were generated for prototype UI testing.",
+        "result_url": f"/calculations/{run.calculation_run_id}/results",
         "satellites_used": [satellite.name for satellite in satellites],
     }
 
@@ -139,3 +143,47 @@ def get_calculation(calculation_run_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Calculation run not found")
 
     return run
+
+
+@router.get("/{calculation_run_id}/results", response_model=CalculationResultResponse)
+def get_calculation_results(calculation_run_id: int, db: Session = Depends(get_db)):
+    run = db.get(CalculationRun, calculation_run_id)
+
+    if run is None:
+        raise HTTPException(status_code=404, detail="Calculation run not found")
+
+    rows = db.execute(
+        select(
+            ObservationWindow,
+            Satellite.name.label("satellite_name"),
+            Sensor.name.label("sensor_name"),
+        )
+        .join(Satellite, Satellite.satellite_id == ObservationWindow.satellite_id)
+        .join(Sensor, Sensor.sensor_id == ObservationWindow.sensor_id)
+        .where(ObservationWindow.calculation_run_id == calculation_run_id)
+        .order_by(ObservationWindow.access_start)
+    ).all()
+
+    windows = [
+        ObservationWindowRead(
+            window_id=row.ObservationWindow.window_id,
+            calculation_run_id=row.ObservationWindow.calculation_run_id,
+            satellite_id=row.ObservationWindow.satellite_id,
+            satellite_name=row.satellite_name,
+            sensor_id=row.ObservationWindow.sensor_id,
+            sensor_name=row.sensor_name,
+            aoi_id=row.ObservationWindow.aoi_id,
+            access_start=row.ObservationWindow.access_start,
+            access_end=row.ObservationWindow.access_end,
+            duration_sec=row.ObservationWindow.duration_sec,
+            max_elevation_deg=row.ObservationWindow.max_elevation_deg,
+            off_nadir_deg=row.ObservationWindow.off_nadir_deg,
+            observation_score=row.ObservationWindow.observation_score,
+        )
+        for row in rows
+    ]
+
+    return CalculationResultResponse(
+        calculation_run=CalculationRead.model_validate(run),
+        windows=windows,
+    )

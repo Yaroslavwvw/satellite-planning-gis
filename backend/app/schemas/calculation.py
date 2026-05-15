@@ -48,6 +48,27 @@ class CalculationRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class ObservationWindowRead(BaseModel):
+    window_id: int
+    calculation_run_id: int
+    satellite_id: int
+    satellite_name: str
+    sensor_id: int
+    sensor_name: str
+    aoi_id: int
+    access_start: datetime
+    access_end: datetime
+    duration_sec: int
+    max_elevation_deg: float | None = None
+    off_nadir_deg: float | None = None
+    observation_score: float | None = None
+
+
+class CalculationResultResponse(BaseModel):
+    calculation_run: CalculationRead
+    windows: list[ObservationWindowRead]
+
+
 class CalculationPlaceholderResponse(BaseModel):
     calculation_run: CalculationRead
     placeholder: dict
