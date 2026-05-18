@@ -3,6 +3,8 @@ from datetime import timedelta
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
+import json
+from sqlalchemy import func
 
 from app.core.database import get_db
 from app.models.aoi import AOI
@@ -13,6 +15,7 @@ from app.models.satellite import Satellite
 from app.models.sensor import Sensor
 from app.models.tle_record import TLERecord
 from app.schemas.calculation import (
+    CalculationAoiRead,
     CalculationCreate,
     CalculationPlaceholderResponse,
     CalculationRead,
@@ -152,6 +155,18 @@ def get_calculation_results(calculation_run_id: int, db: Session = Depends(get_d
     if run is None:
         raise HTTPException(status_code=404, detail="Calculation run not found")
 
+    aoi_row = db.execute(
+        select(
+            AOI.aoi_id,
+            AOI.name,
+            func.ST_AsGeoJSON(AOI.geometry).label("geometry"),
+        )
+        .where(AOI.aoi_id == run.aoi_id)
+    ).one_or_none()
+
+    if aoi_row is None:
+        raise HTTPException(status_code=404, detail="AOI not found for calculation")
+
     rows = db.execute(
         select(
             ObservationWindow,
@@ -185,5 +200,10 @@ def get_calculation_results(calculation_run_id: int, db: Session = Depends(get_d
 
     return CalculationResultResponse(
         calculation_run=CalculationRead.model_validate(run),
+        aoi=CalculationAoiRead(
+            aoi_id=aoi_row.aoi_id,
+            name=aoi_row.name,
+            geometry=json.loads(aoi_row.geometry),
+        ),
         windows=windows,
     )

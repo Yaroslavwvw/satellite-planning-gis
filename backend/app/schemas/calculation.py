@@ -48,6 +48,12 @@ class CalculationRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class CalculationAoiRead(BaseModel):
+    aoi_id: int
+    name: str
+    geometry: dict
+
+
 class ObservationWindowRead(BaseModel):
     window_id: int
     calculation_run_id: int
@@ -66,9 +72,11 @@ class ObservationWindowRead(BaseModel):
 
 class CalculationResultResponse(BaseModel):
     calculation_run: CalculationRead
+    aoi: CalculationAoiRead
     windows: list[ObservationWindowRead]
 
 
 class CalculationPlaceholderResponse(BaseModel):
     calculation_run: CalculationRead
     placeholder: dict
+

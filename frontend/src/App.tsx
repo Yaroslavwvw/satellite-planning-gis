@@ -20,7 +20,7 @@ export default function App() {
 
 function AppContent() {
   const navigate = useNavigate()
-  const { currentCalculationId } = useCalculationContext()
+  const { currentCalculationId, currentResult } = useCalculationContext()
 
   const [isHelpOpen, setIsHelpOpen] = useState(false)
   const [isOpenByLinkOpen, setIsOpenByLinkOpen] = useState(false)
@@ -68,6 +68,7 @@ function AppContent() {
           {currentCalculationId && (
             <span className="current-result-badge">
               Расчёт №{currentCalculationId}
+              {currentResult?.aoi?.name ? ` · ${currentResult.aoi.name}` : ''}
             </span>
           )}
 

@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import type { AoiPoint } from '../map/MapPanel'
 import type { Satellite } from '../../types/satellite'
 
@@ -17,6 +17,7 @@ type Props = {
   isCalculating: boolean
   isUpdatingTle: boolean
   lastTleUpdate: string | null
+  currentAoiName: string | null
   aoiPoints: AoiPoint[]
   onCalculate: (values: CalculationFormValues) => void
   onUpdateTle: () => void
@@ -35,6 +36,7 @@ export default function CalculationSidebar({
   isUpdatingTle,
   lastTleUpdate,
   aoiPoints,
+  currentAoiName,
   onCalculate,
   onUpdateTle,
   onClearAoi,
@@ -47,12 +49,18 @@ export default function CalculationSidebar({
     return date
   }, [])
 
-  const [aoiName, setAoiName] = useState('AOI пользователя')
+  const [aoiName, setAoiName] = useState('')
   const [periodStart, setPeriodStart] = useState(formatDate(today))
   const [periodEnd, setPeriodEnd] = useState(formatDate(plusTwoDays))
   const [stepSeconds, setStepSeconds] = useState(60)
   const [mode, setMode] = useState<'all_catalog' | 'selected'>('all_catalog')
   const [satelliteIds, setSatelliteIds] = useState<number[]>([])
+
+  useEffect(() => {
+    if (currentAoiName) {
+      setAoiName(currentAoiName)
+    }
+  }, [currentAoiName])
 
   function toggleSatellite(satelliteId: number) {
     setSatelliteIds((current) =>
@@ -86,7 +94,7 @@ export default function CalculationSidebar({
         id="aoiName"
         value={aoiName}
         onChange={(event) => setAoiName(event.target.value)}
-        placeholder="Например: Полигон №1"
+        placeholder="Введите название AOI"
       />
 
       <div className={aoiPoints.length >= 3 ? 'aoi-status' : 'aoi-status warning'}>

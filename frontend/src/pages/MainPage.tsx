@@ -15,7 +15,7 @@ import type { Satellite } from '../types/satellite'
 
 const DEMO_AOI_POINTS: AoiPoint[] = [
   { lat: 55.2, lng: 36.5 },
-  { lat: 55.2, lng: 38.5 },
+  { lat: 55.2, lng: 38.5 },   
   { lat: 56.2, lng: 38.5 },
   { lat: 56.2, lng: 36.5 },
 ]
@@ -37,6 +37,26 @@ function buildGeoJsonPolygon(points: AoiPoint[]): GeoJsonPolygon {
   }
 }
 
+function geoJsonPolygonToAoiPoints(geometry: GeoJsonPolygon): AoiPoint[] {
+  const ring = geometry.coordinates[0] ?? []
+
+  const points = ring.map(([lng, lat]) => ({
+    lat,
+    lng,
+  }))
+
+  if (points.length > 1) {
+    const first = points[0]
+    const last = points[points.length - 1]
+
+    if (first.lat === last.lat && first.lng === last.lng) {
+      return points.slice(0, -1)
+    }
+  }
+
+  return points
+}
+
 export default function MainPage() {
   const { currentResult, saveCalculationResult } = useCalculationContext()
 
@@ -49,6 +69,14 @@ export default function MainPage() {
   const [isResultsCollapsed, setIsResultsCollapsed] = useState(false)
   const [lastTleUpdate, setLastTleUpdate] = useState<string | null>(null)
   const [aoiPoints, setAoiPoints] = useState<AoiPoint[]>([])
+
+  useEffect(() => {
+    if (!currentResult?.aoi?.geometry) {
+      return
+    }
+
+    setAoiPoints(geoJsonPolygonToAoiPoints(currentResult.aoi.geometry))
+  }, [currentResult])
 
   useEffect(() => {
     async function loadSatellites() {
@@ -92,7 +120,7 @@ export default function MainPage() {
       setMessage('Выполняется расчёт...')
 
       const aoi = await createAoi({
-        name: values.aoiName || 'AOI from map',
+        name: values.aoiName || 'AOI пользователя',
         geometry: buildGeoJsonPolygon(aoiPoints),
       })
 
@@ -145,6 +173,7 @@ export default function MainPage() {
           isCalculating={isCalculating}
           isUpdatingTle={isUpdatingTle}
           lastTleUpdate={lastTleUpdate}
+          currentAoiName={currentResult?.aoi?.name ?? null}
           aoiPoints={aoiPoints}
           onCalculate={handleCalculate}
           onUpdateTle={handleUpdateTle}

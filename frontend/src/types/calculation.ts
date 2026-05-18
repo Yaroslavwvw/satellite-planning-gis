@@ -36,6 +36,7 @@ export type ObservationWindow = {
 
 export type CalculationResultResponse = {
   calculation_run: CalculationRun
+  aoi: CalculationAoi
   windows: ObservationWindow[]
 }
 
@@ -46,5 +47,14 @@ export type CalculationPlaceholderResponse = {
     summary: string
     result_url?: string
     satellites_used?: string[]
+  }
+}
+
+export type CalculationAoi = {
+  aoi_id: number
+  name: string
+  geometry: {
+    type: 'Polygon'
+    coordinates: number[][][]
   }
 }
