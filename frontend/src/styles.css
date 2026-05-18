@@ -1197,3 +1197,146 @@ button {
   font-size: 12px;
   white-space: nowrap;
 }
+
+/* =========================
+   MAP AOI DRAWING
+========================= */
+
+.map-help-panel {
+  position: absolute;
+  top: 14px;
+  left: 14px;
+  z-index: 600;
+  width: 250px;
+  background: rgba(255, 255, 255, 0.94);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: var(--shadow-soft);
+  padding: 12px;
+  display: grid;
+  gap: 5px;
+}
+
+.map-help-panel strong {
+  color: var(--text-main);
+  font-size: 14px;
+}
+
+.map-help-panel span {
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.map-help-panel button {
+  margin-top: 6px;
+  padding: 8px 10px;
+  border-radius: 7px;
+  border: 1px solid var(--border);
+  background: #ffffff;
+  color: var(--primary-dark);
+  font-weight: 800;
+}
+
+.map-legend {
+  position: absolute;
+  right: 14px;
+  bottom: 20px;
+  z-index: 600;
+  background: rgba(255, 255, 255, 0.94);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: var(--shadow-soft);
+  padding: 10px 12px;
+  display: grid;
+  gap: 8px;
+  color: #475569;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.map-legend div {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.legend-box.aoi {
+  width: 16px;
+  height: 12px;
+  border: 2px solid var(--primary);
+  background: rgba(47, 103, 166, 0.18);
+  border-radius: 3px;
+}
+
+.legend-line {
+  width: 18px;
+  height: 3px;
+  background: var(--primary);
+  border-radius: 999px;
+}
+
+.aoi-status.warning {
+  background: #fff8ed;
+  color: #9a5b12;
+  border-color: #f2d2a5;
+}
+
+.sidebar-button-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin: 0 14px 8px;
+}
+
+.sidebar-button-row button {
+  width: 100%;
+  margin: 0;
+}
+
+/* =========================
+   AOI COORDINATES LIST
+========================= */
+
+.aoi-coordinates {
+  margin: 8px 14px 12px;
+  padding: 10px;
+  max-height: 180px;
+  overflow: auto;
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+  background: #fbfcff;
+}
+
+.aoi-coordinates-title {
+  margin-bottom: 8px;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.aoi-coordinate-row {
+  display: grid;
+  grid-template-columns: 70px 1fr;
+  gap: 8px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.aoi-coordinate-row:last-child {
+  border-bottom: none;
+}
+
+.aoi-coordinate-row span {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.aoi-coordinate-row strong {
+  color: var(--text-main);
+  font-size: 12px;
+  font-family: Consolas, monospace;
+  text-align: right;
+}

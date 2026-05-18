@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react'
+import type { AoiPoint } from '../map/MapPanel'
 import type { Satellite } from '../../types/satellite'
 
 export type CalculationFormValues = {
@@ -16,8 +17,11 @@ type Props = {
   isCalculating: boolean
   isUpdatingTle: boolean
   lastTleUpdate: string | null
+  aoiPoints: AoiPoint[]
   onCalculate: (values: CalculationFormValues) => void
   onUpdateTle: () => void
+  onClearAoi: () => void
+  onUseDemoAoi: () => void
 }
 
 function formatDate(date: Date) {
@@ -30,8 +34,11 @@ export default function CalculationSidebar({
   isCalculating,
   isUpdatingTle,
   lastTleUpdate,
+  aoiPoints,
   onCalculate,
   onUpdateTle,
+  onClearAoi,
+  onUseDemoAoi,
 }: Props) {
   const today = useMemo(() => new Date(), [])
   const plusTwoDays = useMemo(() => {
@@ -40,7 +47,7 @@ export default function CalculationSidebar({
     return date
   }, [])
 
-  const [aoiName, setAoiName] = useState('Test AOI - Moscow Region')
+  const [aoiName, setAoiName] = useState('AOI пользователя')
   const [periodStart, setPeriodStart] = useState(formatDate(today))
   const [periodEnd, setPeriodEnd] = useState(formatDate(plusTwoDays))
   const [stepSeconds, setStepSeconds] = useState(60)
@@ -66,6 +73,10 @@ export default function CalculationSidebar({
     })
   }
 
+  function formatCoordinate(value: number) {
+  return value.toFixed(5)
+}
+
   return (
     <aside className="sidebar">
       <div className="section-title">Область интереса</div>
@@ -78,7 +89,40 @@ export default function CalculationSidebar({
         placeholder="Например: Полигон №1"
       />
 
-      <div className="aoi-status">Тестовый полигон: Московский регион</div>
+      <div className={aoiPoints.length >= 3 ? 'aoi-status' : 'aoi-status warning'}>
+        {aoiPoints.length >= 3
+          ? `AOI задана: ${aoiPoints.length} точек`
+          : `AOI не завершена: ${aoiPoints.length} точек из 3`}
+      </div>
+
+      <div className="sidebar-button-row">
+        <button type="button" className="secondary-button" onClick={onUseDemoAoi}>
+          Демо AOI
+        </button>
+
+        <button type="button" className="secondary-button" onClick={onClearAoi}>
+          Очистить
+        </button>
+      </div>
+
+      {aoiPoints.length > 0 && (
+        <div className="aoi-coordinates">
+          <div className="aoi-coordinates-title">Координаты точек</div>
+
+          {aoiPoints.map((point, index) => (
+            <div key={`${point.lat}-${point.lng}-${index}`} className="aoi-coordinate-row">
+              <span>Точка {index + 1}</span>
+              <strong>
+                {formatCoordinate(point.lat)}, {formatCoordinate(point.lng)}
+              </strong>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div className="hint">
+        Кликните по карте минимум 3 раза, чтобы задать полигон области интереса.
+      </div>
 
       <div className="section-title">Период расчёта</div>
 
@@ -143,7 +187,7 @@ export default function CalculationSidebar({
 
       <div className="section-title">Параметры расчёта</div>
 
-      <label htmlFor="step">Шаг расчёта (SGP4)</label>
+      <label htmlFor="step">Шаг расчёта SGP4</label>
       <select
         id="step"
         value={stepSeconds}
@@ -160,9 +204,15 @@ export default function CalculationSidebar({
         {isCalculating ? 'Выполняется расчёт...' : 'Рассчитать'}
       </button>
 
-      <button type="button" className="secondary-button" onClick={onUpdateTle} disabled={isUpdatingTle}>
+      <button
+        type="button"
+        className="secondary-button"
+        onClick={onUpdateTle}
+        disabled={isUpdatingTle}
+      >
         {isUpdatingTle ? 'Обновление TLE...' : 'Обновить TLE'}
       </button>
+
       <div className="section-title">Служебная информация</div>
 
       <div className="service-info">

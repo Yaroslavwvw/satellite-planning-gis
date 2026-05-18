@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import MainLayout from '../components/layout/MainLayout'
-import MapPanel from '../components/map/MapPanel'
+import MapPanel, { type AoiPoint } from '../components/map/MapPanel'
 import ResultsPanel from '../components/results/ResultsPanel'
 import CalculationSidebar, {
   type CalculationFormValues,
@@ -10,34 +10,45 @@ import { createCalculation, fetchCalculationResults } from '../api/calculations'
 import { fetchSatellites } from '../api/satellites'
 import { updateTle } from '../api/tle'
 import { useCalculationContext } from '../context/CalculationContext'
+import type { GeoJsonPolygon } from '../api/aois'
 import type { Satellite } from '../types/satellite'
 
-const DEMO_AOI_POLYGON = {
-  type: 'Polygon' as const,
-  coordinates: [
-    [
-      [36.5, 55.2],
-      [38.5, 55.2],
-      [38.5, 56.2],
-      [36.5, 56.2],
-      [36.5, 55.2],
+const DEMO_AOI_POINTS: AoiPoint[] = [
+  { lat: 55.2, lng: 36.5 },
+  { lat: 55.2, lng: 38.5 },
+  { lat: 56.2, lng: 38.5 },
+  { lat: 56.2, lng: 36.5 },
+]
+
+function buildGeoJsonPolygon(points: AoiPoint[]): GeoJsonPolygon {
+  const coordinates = points.map((point) => [point.lng, point.lat])
+  const firstPoint = coordinates[0]
+  const lastPoint = coordinates[coordinates.length - 1]
+
+  const isClosed =
+    firstPoint[0] === lastPoint[0] &&
+    firstPoint[1] === lastPoint[1]
+
+  return {
+    type: 'Polygon',
+    coordinates: [
+      isClosed ? coordinates : [...coordinates, firstPoint],
     ],
-  ],
+  }
 }
 
 export default function MainPage() {
-  const {
-    currentResult,
-    saveCalculationResult,
-  } = useCalculationContext()
+  const { currentResult, saveCalculationResult } = useCalculationContext()
 
   const [satellites, setSatellites] = useState<Satellite[]>([])
   const [message, setMessage] = useState<string>('')
   const [isLoadingSatellites, setIsLoadingSatellites] = useState(false)
   const [isCalculating, setIsCalculating] = useState(false)
   const [isUpdatingTle, setIsUpdatingTle] = useState(false)
+
   const [isResultsCollapsed, setIsResultsCollapsed] = useState(false)
   const [lastTleUpdate, setLastTleUpdate] = useState<string | null>(null)
+  const [aoiPoints, setAoiPoints] = useState<AoiPoint[]>([])
 
   useEffect(() => {
     async function loadSatellites() {
@@ -56,14 +67,33 @@ export default function MainPage() {
     loadSatellites()
   }, [])
 
+  function handleAddAoiPoint(point: AoiPoint) {
+    setAoiPoints((current) => [...current, point])
+  }
+
+  function handleClearAoi() {
+    setAoiPoints([])
+    setMessage('AOI очищена')
+  }
+
+  function handleUseDemoAoi() {
+    setAoiPoints(DEMO_AOI_POINTS)
+    setMessage('Демо AOI добавлена на карту')
+  }
+
   async function handleCalculate(values: CalculationFormValues) {
+    if (aoiPoints.length < 3) {
+      setMessage('Задайте AOI на карте: нужно минимум 3 точки полигона')
+      return
+    }
+
     try {
       setIsCalculating(true)
       setMessage('Выполняется расчёт...')
 
       const aoi = await createAoi({
-        name: values.aoiName || 'Demo AOI - Moscow Region',
-        geometry: DEMO_AOI_POLYGON,
+        name: values.aoiName || 'AOI from map',
+        geometry: buildGeoJsonPolygon(aoiPoints),
       })
 
       const calculation = await createCalculation({
@@ -92,7 +122,9 @@ export default function MainPage() {
     try {
       setIsUpdatingTle(true)
       setMessage('Обновление TLE...')
+
       const response = await updateTle({ satellite_ids: null })
+
       setMessage(`TLE обновлены: ${response.updated_records} записей`)
       setLastTleUpdate(new Date().toLocaleString('ru-RU'))
     } catch (error) {
@@ -113,11 +145,20 @@ export default function MainPage() {
           isCalculating={isCalculating}
           isUpdatingTle={isUpdatingTle}
           lastTleUpdate={lastTleUpdate}
+          aoiPoints={aoiPoints}
           onCalculate={handleCalculate}
           onUpdateTle={handleUpdateTle}
+          onClearAoi={handleClearAoi}
+          onUseDemoAoi={handleUseDemoAoi}
         />
       }
-      map={<MapPanel />}
+      map={
+        <MapPanel
+          aoiPoints={aoiPoints}
+          isResultsCollapsed={isResultsCollapsed}
+          onAddAoiPoint={handleAddAoiPoint}
+        />
+      }
       results={
         <ResultsPanel
           result={currentResult}
