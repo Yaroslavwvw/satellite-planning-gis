@@ -1,5 +1,5 @@
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from app.models.satellite import Satellite
 from app.models.sensor import Sensor
@@ -14,4 +14,11 @@ def get_satellite(db: Session, satellite_id: int) -> Satellite | None:
 
 
 def list_satellite_sensors(db: Session, satellite_id: int) -> list[Sensor]:
-    return list(db.scalars(select(Sensor).where(Sensor.satellite_id == satellite_id).order_by(Sensor.name)))
+    return list(
+        db.scalars(
+            select(Sensor)
+            .options(selectinload(Sensor.bands))
+            .where(Sensor.satellite_id == satellite_id)
+            .order_by(Sensor.name)
+        )
+    )

@@ -9,7 +9,7 @@ import { createAoi } from '../api/aois'
 import { createCalculation, fetchCalculationResults } from '../api/calculations'
 import { fetchSatellites } from '../api/satellites'
 import { updateTle } from '../api/tle'
-import type { CalculationResultResponse } from '../types/calculation'
+import { useCalculationContext } from '../context/CalculationContext'
 import type { Satellite } from '../types/satellite'
 
 const DEMO_AOI_POLYGON = {
@@ -26,12 +26,18 @@ const DEMO_AOI_POLYGON = {
 }
 
 export default function MainPage() {
+  const {
+    currentResult,
+    saveCalculationResult,
+  } = useCalculationContext()
+
   const [satellites, setSatellites] = useState<Satellite[]>([])
-  const [result, setResult] = useState<CalculationResultResponse | null>(null)
   const [message, setMessage] = useState<string>('')
   const [isLoadingSatellites, setIsLoadingSatellites] = useState(false)
   const [isCalculating, setIsCalculating] = useState(false)
   const [isUpdatingTle, setIsUpdatingTle] = useState(false)
+  const [isResultsCollapsed, setIsResultsCollapsed] = useState(false)
+  const [lastTleUpdate, setLastTleUpdate] = useState<string | null>(null)
 
   useEffect(() => {
     async function loadSatellites() {
@@ -54,7 +60,6 @@ export default function MainPage() {
     try {
       setIsCalculating(true)
       setMessage('Выполняется расчёт...')
-      setResult(null)
 
       const aoi = await createAoi({
         name: values.aoiName || 'Demo AOI - Moscow Region',
@@ -73,7 +78,7 @@ export default function MainPage() {
       const calculationId = calculation.calculation_run.calculation_run_id
       const calculationResult = await fetchCalculationResults(calculationId)
 
-      setResult(calculationResult)
+      saveCalculationResult(calculationResult)
       setMessage(`Расчёт №${calculationId} выполнен`)
     } catch (error) {
       console.error(error)
@@ -89,6 +94,7 @@ export default function MainPage() {
       setMessage('Обновление TLE...')
       const response = await updateTle({ satellite_ids: null })
       setMessage(`TLE обновлены: ${response.updated_records} записей`)
+      setLastTleUpdate(new Date().toLocaleString('ru-RU'))
     } catch (error) {
       console.error(error)
       setMessage('Ошибка обновления TLE')
@@ -99,12 +105,14 @@ export default function MainPage() {
 
   return (
     <MainLayout
+      isResultsCollapsed={isResultsCollapsed}
       sidebar={
         <CalculationSidebar
           satellites={satellites}
           isLoadingSatellites={isLoadingSatellites}
           isCalculating={isCalculating}
           isUpdatingTle={isUpdatingTle}
+          lastTleUpdate={lastTleUpdate}
           onCalculate={handleCalculate}
           onUpdateTle={handleUpdateTle}
         />
@@ -112,9 +120,11 @@ export default function MainPage() {
       map={<MapPanel />}
       results={
         <ResultsPanel
-          result={result}
+          result={currentResult}
           message={message}
           isCalculating={isCalculating}
+          isCollapsed={isResultsCollapsed}
+          onToggleCollapse={() => setIsResultsCollapsed((value) => !value)}
         />
       }
     />

@@ -15,6 +15,7 @@ type Props = {
   isLoadingSatellites: boolean
   isCalculating: boolean
   isUpdatingTle: boolean
+  lastTleUpdate: string | null
   onCalculate: (values: CalculationFormValues) => void
   onUpdateTle: () => void
 }
@@ -28,6 +29,7 @@ export default function CalculationSidebar({
   isLoadingSatellites,
   isCalculating,
   isUpdatingTle,
+  lastTleUpdate,
   onCalculate,
   onUpdateTle,
 }: Props) {
@@ -161,6 +163,34 @@ export default function CalculationSidebar({
       <button type="button" className="secondary-button" onClick={onUpdateTle} disabled={isUpdatingTle}>
         {isUpdatingTle ? 'Обновление TLE...' : 'Обновить TLE'}
       </button>
+      <div className="section-title">Служебная информация</div>
+
+      <div className="service-info">
+        <div>
+          <span>Источник TLE</span>
+          <strong>CelesTrak</strong>
+        </div>
+
+        <div>
+          <span>Последнее обновление</span>
+          <strong>{lastTleUpdate ?? 'Не обновлялось в текущей сессии'}</strong>
+        </div>
+
+        <div>
+          <span>Модель расчёта</span>
+          <strong>SGP4</strong>
+        </div>
+
+        <div>
+          <span>Период анализа</span>
+          <strong>до 7 суток</strong>
+        </div>
+
+        <div>
+          <span>Текущий режим</span>
+          <strong>прототипные окна наблюдения</strong>
+        </div>
+      </div>
     </aside>
   )
 }

@@ -12,6 +12,14 @@ export type Satellite = {
   description: string | null
 }
 
+export type SensorBand = {
+  band_id: number
+  sensor_id: number
+  band_name: string
+  spectral_range_nm: string | null
+  spatial_resolution_m: number
+}
+
 export type Sensor = {
   sensor_id: number
   satellite_id: number
@@ -21,4 +29,5 @@ export type Sensor = {
   off_nadir_max_deg: number | null
   retarget_time_sec: number | null
   notes: string | null
+  bands: SensorBand[]
 }
