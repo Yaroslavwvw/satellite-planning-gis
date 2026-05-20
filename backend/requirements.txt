@@ -9,3 +9,6 @@ httpx==0.28.1
 sgp4==2.24
 numpy==2.3.2
 shapely==2.1.1
+skyfield
+shapely
+pyproj

@@ -33,7 +33,7 @@ function buildCsv(windows: ObservationWindow[]) {
     'Начало окна',
     'Конец окна',
     'Длительность, сек',
-    'Макс. высота',
+    'Угол наблюдения',
     'Угол отклонения',
     'Оценка',
   ]
@@ -353,7 +353,7 @@ function ObservationWindowsTable({ windows }: { windows: ObservationWindow[] }) 
             <th>Начало окна</th>
             <th>Конец окна</th>
             <th>Длит.</th>
-            <th>Макс. высота</th>
+            <th>Угол наблюдения</th>
             <th>Угол откл.</th>
             <th>Оценка</th>
           </tr>

@@ -73,6 +73,7 @@ class ObservationWindowRead(BaseModel):
 class CalculationResultResponse(BaseModel):
     calculation_run: CalculationRead
     aoi: CalculationAoiRead
+    satellite_ids: list[int]
     windows: list[ObservationWindowRead]
 
 

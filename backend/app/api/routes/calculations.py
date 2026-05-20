@@ -1,10 +1,12 @@
-from datetime import timedelta
-
-from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select
-from sqlalchemy.orm import Session
 import json
 from sqlalchemy import func
+
+from datetime import timedelta, datetime, timezone
+
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import func, select
+from sqlalchemy.orm import Session
+
 
 from app.core.database import get_db
 from app.models.aoi import AOI
@@ -22,9 +24,19 @@ from app.schemas.calculation import (
     CalculationResultResponse,
     ObservationWindowRead,
 )
+from app.services.orbit_service import generate_satellite_track
+from app.services.visibility_service import detect_observation_windows
 
 router = APIRouter(prefix="/api/calculations", tags=["calculations"])
 
+MIN_WINDOW_DURATION_SEC = 120
+MIN_OBSERVATION_SCORE = 0.15
+
+def to_db_datetime(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value
+
+    return value.astimezone(timezone.utc).replace(tzinfo=None)
 
 @router.post("", response_model=CalculationPlaceholderResponse)
 def create_calculation(payload: CalculationCreate, db: Session = Depends(get_db)):
@@ -57,7 +69,15 @@ def create_calculation(payload: CalculationCreate, db: Session = Depends(get_db)
     db.add(run)
     db.flush()
 
-    missing_tle: list[str] = []
+    aoi_geometry_raw = db.scalar(
+        select(func.ST_AsGeoJSON(AOI.geometry)).where(AOI.aoi_id == payload.aoi_id)
+    )
+
+    if aoi_geometry_raw is None:
+        db.rollback()
+        raise HTTPException(status_code=404, detail="AOI geometry not found")
+
+    aoi_geometry = json.loads(aoi_geometry_raw)
 
     satellites = list(
         db.scalars(
@@ -67,7 +87,10 @@ def create_calculation(payload: CalculationCreate, db: Session = Depends(get_db)
         )
     )
 
-    for index, satellite in enumerate(satellites):
+    missing_tle: list[str] = []
+    total_windows = 0
+
+    for satellite in satellites:
         current_tle = db.scalar(
             select(TLERecord)
             .where(TLERecord.satellite_id == satellite.satellite_id)
@@ -87,33 +110,66 @@ def create_calculation(payload: CalculationCreate, db: Session = Depends(get_db)
             )
         )
 
-        sensor = db.scalar(
-            select(Sensor)
-            .where(Sensor.satellite_id == satellite.satellite_id)
-            .order_by(Sensor.sensor_id)
+        sensors = list(
+            db.scalars(
+                select(Sensor)
+                .where(Sensor.satellite_id == satellite.satellite_id)
+                .order_by(Sensor.sensor_id)
+            )
         )
 
-        if sensor is None:
+        if not sensors:
             continue
 
-        window_start = payload.period_start + timedelta(hours=index * 3 + 1)
-        window_end = window_start + timedelta(minutes=5)
-
-        if window_end <= payload.period_end:
-            db.add(
-                ObservationWindow(
-                    calculation_run_id=run.calculation_run_id,
-                    satellite_id=satellite.satellite_id,
-                    sensor_id=sensor.sensor_id,
-                    aoi_id=payload.aoi_id,
-                    access_start=window_start,
-                    access_end=window_end,
-                    duration_sec=300,
-                    max_elevation_deg=55.0,
-                    off_nadir_deg=12.0,
-                    observation_score=0.75,
-                )
+        try:
+            track = generate_satellite_track(
+                satellite_name=satellite.name,
+                line1=current_tle.line1,
+                line2=current_tle.line2,
+                start_time=payload.period_start,
+                end_time=payload.period_end,
+                step_seconds=payload.step_seconds,
             )
+        except ValueError as exc:
+            db.rollback()
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        for sensor in sensors:
+            if sensor.swath_km is None:
+                continue
+
+            detected_windows = detect_observation_windows(
+                track_points=track,
+                aoi_geojson=aoi_geometry,
+                swath_km=sensor.swath_km,
+                step_seconds=payload.step_seconds,
+            )
+
+            for detected_window in detected_windows:
+                if detected_window.duration_sec < MIN_WINDOW_DURATION_SEC:
+                    continue
+
+                if (
+                    detected_window.observation_score is None
+                    or detected_window.observation_score < MIN_OBSERVATION_SCORE
+                ):
+                    continue
+
+                db.add(
+                    ObservationWindow(
+                        calculation_run_id=run.calculation_run_id,
+                        satellite_id=satellite.satellite_id,
+                        sensor_id=sensor.sensor_id,
+                        aoi_id=payload.aoi_id,
+                        access_start=to_db_datetime(detected_window.access_start),
+                        access_end=to_db_datetime(detected_window.access_end),
+                        duration_sec=detected_window.duration_sec,
+                        max_elevation_deg=detected_window.max_elevation_deg,
+                        off_nadir_deg=detected_window.off_nadir_deg,
+                        observation_score=detected_window.observation_score,
+                    )
+                )
+                total_windows += 1
 
     if missing_tle:
         db.rollback()
@@ -126,10 +182,11 @@ def create_calculation(payload: CalculationCreate, db: Session = Depends(get_db)
     db.refresh(run)
 
     placeholder = {
-        "status": "placeholder",
-        "summary": "Calculation run created. Temporary observation windows were generated for prototype UI testing.",
+        "status": "calculated",
+        "summary": "Observation windows were generated using SGP4 track and AOI visibility approximation.",
         "result_url": f"/calculations/{run.calculation_run_id}/results",
         "satellites_used": [satellite.name for satellite in satellites],
+        "windows_created": total_windows,
     }
 
     return CalculationPlaceholderResponse(
@@ -173,8 +230,15 @@ def get_calculation_results(calculation_run_id: int, db: Session = Depends(get_d
             Satellite.name.label("satellite_name"),
             Sensor.name.label("sensor_name"),
         )
-        .join(Satellite, Satellite.satellite_id == ObservationWindow.satellite_id)
-        .join(Sensor, Sensor.sensor_id == ObservationWindow.sensor_id)
+        .select_from(ObservationWindow)     
+        .join(
+            Satellite,
+            Satellite.satellite_id == ObservationWindow.satellite_id,
+        )
+        .join(
+            Sensor,
+            Sensor.sensor_id == ObservationWindow.sensor_id,
+        )
         .where(ObservationWindow.calculation_run_id == calculation_run_id)
         .order_by(ObservationWindow.access_start)
     ).all()
@@ -198,6 +262,15 @@ def get_calculation_results(calculation_run_id: int, db: Session = Depends(get_d
         for row in rows
     ]
 
+    satellite_ids = list(
+        db.scalars(
+            select(CalculationRunSatellite.satellite_id)
+            .where(CalculationRunSatellite.calculation_run_id == calculation_run_id)
+            .distinct()
+            .order_by(CalculationRunSatellite.satellite_id)
+        )
+    )
+
     return CalculationResultResponse(
         calculation_run=CalculationRead.model_validate(run),
         aoi=CalculationAoiRead(
@@ -205,5 +278,6 @@ def get_calculation_results(calculation_run_id: int, db: Session = Depends(get_d
             name=aoi_row.name,
             geometry=json.loads(aoi_row.geometry),
         ),
+        satellite_ids=satellite_ids,
         windows=windows,
     )

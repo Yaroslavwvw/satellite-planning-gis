@@ -37,6 +37,7 @@ export type ObservationWindow = {
 export type CalculationResultResponse = {
   calculation_run: CalculationRun
   aoi: CalculationAoi
+  satellite_ids: number[]
   windows: ObservationWindow[]
 }
 

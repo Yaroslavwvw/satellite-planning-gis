@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { AoiPoint } from '../map/MapPanel'
+import type { CalculationRun } from '../../types/calculation'
 import type { Satellite } from '../../types/satellite'
 
 export type CalculationFormValues = {
@@ -18,6 +19,8 @@ type Props = {
   isUpdatingTle: boolean
   lastTleUpdate: string | null
   currentAoiName: string | null
+  currentCalculationRun: CalculationRun | null
+  currentCalculationSatelliteIds: number[]
   aoiPoints: AoiPoint[]
   onCalculate: (values: CalculationFormValues) => void
   onUpdateTle: () => void
@@ -35,8 +38,10 @@ export default function CalculationSidebar({
   isCalculating,
   isUpdatingTle,
   lastTleUpdate,
-  aoiPoints,
   currentAoiName,
+  currentCalculationRun,
+  currentCalculationSatelliteIds,
+  aoiPoints,
   onCalculate,
   onUpdateTle,
   onClearAoi,
@@ -61,6 +66,24 @@ export default function CalculationSidebar({
       setAoiName(currentAoiName)
     }
   }, [currentAoiName])
+
+  useEffect(() => {
+    if (!currentCalculationRun) {
+      return
+    }
+
+    setPeriodStart(currentCalculationRun.period_start.slice(0, 10))
+    setPeriodEnd(currentCalculationRun.period_end.slice(0, 10))
+    setStepSeconds(currentCalculationRun.step_seconds)
+
+    if (currentCalculationRun.mode === 'selected') {
+      setMode('selected')
+      setSatelliteIds(currentCalculationSatelliteIds)
+    } else {
+      setMode('all_catalog')
+      setSatelliteIds([])
+    }
+  }, [currentCalculationRun, currentCalculationSatelliteIds])
 
   function toggleSatellite(satelliteId: number) {
     setSatelliteIds((current) =>

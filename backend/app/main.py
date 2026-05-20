@@ -5,10 +5,15 @@ from app.api.routes.aois import router as aois_router
 from app.api.routes.calculations import router as calculations_router
 from app.api.routes.satellites import router as satellites_router
 from app.api.routes.tle import router as tle_router
+from app.api.routes.orbits import router as orbits_router
 from app.core.config import get_settings
+
+
 
 settings = get_settings()
 app = FastAPI(title=settings.app_name, debug=settings.debug)
+
+app.include_router(orbits_router)
 
 app.add_middleware(
     CORSMiddleware,

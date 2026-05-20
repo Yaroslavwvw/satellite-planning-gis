@@ -67,7 +67,9 @@ export default function MainPage() {
   const [isUpdatingTle, setIsUpdatingTle] = useState(false)
 
   const [isResultsCollapsed, setIsResultsCollapsed] = useState(false)
-  const [lastTleUpdate, setLastTleUpdate] = useState<string | null>(null)
+  const [lastTleUpdate, setLastTleUpdate] = useState<string | null>(() => {
+    return sessionStorage.getItem('satellitePlanning.lastTleUpdate')
+  })
   const [aoiPoints, setAoiPoints] = useState<AoiPoint[]>([])
 
   useEffect(() => {
@@ -154,7 +156,9 @@ export default function MainPage() {
       const response = await updateTle({ satellite_ids: null })
 
       setMessage(`TLE обновлены: ${response.updated_records} записей`)
-      setLastTleUpdate(new Date().toLocaleString('ru-RU'))
+      const updatedAt = new Date().toLocaleString('ru-RU')
+      setLastTleUpdate(updatedAt)
+      sessionStorage.setItem('satellitePlanning.lastTleUpdate', updatedAt)
     } catch (error) {
       console.error(error)
       setMessage('Ошибка обновления TLE')
@@ -174,6 +178,8 @@ export default function MainPage() {
           isUpdatingTle={isUpdatingTle}
           lastTleUpdate={lastTleUpdate}
           currentAoiName={currentResult?.aoi?.name ?? null}
+          currentCalculationRun={currentResult?.calculation_run ?? null}
+          currentCalculationSatelliteIds={currentResult?.satellite_ids ?? []}
           aoiPoints={aoiPoints}
           onCalculate={handleCalculate}
           onUpdateTle={handleUpdateTle}
