@@ -1,12 +1,9 @@
 import json
-from sqlalchemy import func
-
-from datetime import timedelta, datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
-
 
 from app.core.database import get_db
 from app.models.aoi import AOI
@@ -22,7 +19,15 @@ from app.schemas.calculation import (
     CalculationPlaceholderResponse,
     CalculationRead,
     CalculationResultResponse,
+    FootprintLayerRead,
     ObservationWindowRead,
+    TrackLayerRead,
+    WindowMapLayerResponse,
+)
+from app.services.map_layers_service import (
+    build_footprint_corridor_geojson,
+    build_track_line_geojson,
+    select_track_segment_near_aoi,
 )
 from app.services.orbit_service import generate_satellite_track
 from app.services.visibility_service import detect_observation_windows
@@ -32,15 +37,21 @@ router = APIRouter(prefix="/api/calculations", tags=["calculations"])
 MIN_WINDOW_DURATION_SEC = 120
 MIN_OBSERVATION_SCORE = 0.15
 
+WINDOW_LAYER_PADDING_MINUTES = 5
+WINDOW_LAYER_STEP_SECONDS = 120
+
+
 def to_db_datetime(value: datetime) -> datetime:
     if value.tzinfo is None:
         return value
 
     return value.astimezone(timezone.utc).replace(tzinfo=None)
 
+
 @router.post("", response_model=CalculationPlaceholderResponse)
 def create_calculation(payload: CalculationCreate, db: Session = Depends(get_db)):
     aoi = db.get(AOI, payload.aoi_id)
+
     if aoi is None:
         raise HTTPException(status_code=404, detail="AOI not found")
 
@@ -50,9 +61,14 @@ def create_calculation(payload: CalculationCreate, db: Session = Depends(get_db)
                 status_code=400,
                 detail="satellite_ids is required when mode='selected'",
             )
+
         satellite_ids = payload.satellite_ids
     else:
-        satellite_ids = list(db.scalars(select(Satellite.satellite_id)))
+        satellite_ids = list(
+            db.scalars(
+                select(Satellite.satellite_id).order_by(Satellite.satellite_id)
+            )
+        )
 
     if not satellite_ids:
         raise HTTPException(status_code=400, detail="No satellites selected")
@@ -86,6 +102,10 @@ def create_calculation(payload: CalculationCreate, db: Session = Depends(get_db)
             .order_by(Satellite.name)
         )
     )
+
+    if not satellites:
+        db.rollback()
+        raise HTTPException(status_code=400, detail="Selected satellites not found")
 
     missing_tle: list[str] = []
     total_windows = 0
@@ -169,6 +189,7 @@ def create_calculation(payload: CalculationCreate, db: Session = Depends(get_db)
                         observation_score=detected_window.observation_score,
                     )
                 )
+
                 total_windows += 1
 
     if missing_tle:
@@ -183,8 +204,11 @@ def create_calculation(payload: CalculationCreate, db: Session = Depends(get_db)
 
     placeholder = {
         "status": "calculated",
-        "summary": "Observation windows were generated using SGP4 track and AOI visibility approximation.",
-        "result_url": f"/calculations/{run.calculation_run_id}/results",
+        "summary": (
+            "Observation windows were generated using SGP4 track and AOI "
+            "visibility approximation."
+        ),
+        "result_url": f"/api/calculations/{run.calculation_run_id}/results",
         "satellites_used": [satellite.name for satellite in satellites],
         "windows_created": total_windows,
     }
@@ -193,16 +217,6 @@ def create_calculation(payload: CalculationCreate, db: Session = Depends(get_db)
         calculation_run=CalculationRead.model_validate(run),
         placeholder=placeholder,
     )
-
-
-@router.get("/{calculation_run_id}", response_model=CalculationRead)
-def get_calculation(calculation_run_id: int, db: Session = Depends(get_db)):
-    run = db.get(CalculationRun, calculation_run_id)
-
-    if run is None:
-        raise HTTPException(status_code=404, detail="Calculation run not found")
-
-    return run
 
 
 @router.get("/{calculation_run_id}/results", response_model=CalculationResultResponse)
@@ -224,21 +238,17 @@ def get_calculation_results(calculation_run_id: int, db: Session = Depends(get_d
     if aoi_row is None:
         raise HTTPException(status_code=404, detail="AOI not found for calculation")
 
+    aoi_geometry = json.loads(aoi_row.geometry)
+
     rows = db.execute(
         select(
             ObservationWindow,
             Satellite.name.label("satellite_name"),
             Sensor.name.label("sensor_name"),
         )
-        .select_from(ObservationWindow)     
-        .join(
-            Satellite,
-            Satellite.satellite_id == ObservationWindow.satellite_id,
-        )
-        .join(
-            Sensor,
-            Sensor.sensor_id == ObservationWindow.sensor_id,
-        )
+        .select_from(ObservationWindow)
+        .join(Satellite, Satellite.satellite_id == ObservationWindow.satellite_id)
+        .join(Sensor, Sensor.sensor_id == ObservationWindow.sensor_id)
         .where(ObservationWindow.calculation_run_id == calculation_run_id)
         .order_by(ObservationWindow.access_start)
     ).all()
@@ -276,8 +286,149 @@ def get_calculation_results(calculation_run_id: int, db: Session = Depends(get_d
         aoi=CalculationAoiRead(
             aoi_id=aoi_row.aoi_id,
             name=aoi_row.name,
-            geometry=json.loads(aoi_row.geometry),
+            geometry=aoi_geometry,
         ),
         satellite_ids=satellite_ids,
         windows=windows,
+        tracks=[],
+        footprints=[],
+    )
+
+
+@router.get(
+    "/{calculation_run_id}/windows/{window_id}/map-layer",
+    response_model=WindowMapLayerResponse,
+)
+def get_window_map_layer(
+    calculation_run_id: int,
+    window_id: int,
+    db: Session = Depends(get_db),
+):
+    run = db.get(CalculationRun, calculation_run_id)
+
+    if run is None:
+        raise HTTPException(status_code=404, detail="Calculation run not found")
+
+    window = db.scalar(
+        select(ObservationWindow)
+        .where(ObservationWindow.calculation_run_id == calculation_run_id)
+        .where(ObservationWindow.window_id == window_id)
+    )
+
+    if window is None:
+        raise HTTPException(status_code=404, detail="Observation window not found")
+
+    satellite = db.get(Satellite, window.satellite_id)
+
+    if satellite is None:
+        raise HTTPException(status_code=404, detail="Satellite not found")
+
+    sensor = db.get(Sensor, window.sensor_id)
+
+    if sensor is None:
+        raise HTTPException(status_code=404, detail="Sensor not found")
+
+    calculation_satellite = db.scalar(
+        select(CalculationRunSatellite)
+        .where(CalculationRunSatellite.calculation_run_id == calculation_run_id)
+        .where(CalculationRunSatellite.satellite_id == window.satellite_id)
+    )
+
+    if calculation_satellite is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Calculation satellite relation not found",
+        )
+
+    tle_record = db.get(TLERecord, calculation_satellite.tle_id)
+
+    if tle_record is None:
+        raise HTTPException(status_code=404, detail="TLE record not found")
+
+    aoi_geometry_raw = db.scalar(
+        select(func.ST_AsGeoJSON(AOI.geometry)).where(AOI.aoi_id == window.aoi_id)
+    )
+
+    if aoi_geometry_raw is None:
+        raise HTTPException(status_code=404, detail="AOI geometry not found")
+
+    aoi_geometry = json.loads(aoi_geometry_raw)
+
+    segment_start = window.access_start - timedelta(
+        minutes=WINDOW_LAYER_PADDING_MINUTES
+    )
+    segment_end = window.access_end + timedelta(
+        minutes=WINDOW_LAYER_PADDING_MINUTES
+    )
+
+    try:
+        track_points = generate_satellite_track(
+            satellite_name=satellite.name,
+            line1=tle_record.line1,
+            line2=tle_record.line2,
+            start_time=segment_start,
+            end_time=segment_end,
+            step_seconds=WINDOW_LAYER_STEP_SECONDS,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    local_track_points = select_track_segment_near_aoi(
+        track_points=track_points,
+        aoi_geojson=aoi_geometry,
+        points_before=3,
+        points_after=3,
+    )
+
+    # local_track_points = select_track_segment_near_aoi(
+    #     track_points=track_points,
+    #     aoi_geojson=aoi_geometry,
+    #     swath_km=sensor.swath_km,
+    # )   
+
+    if len(local_track_points) < 2:
+        return WindowMapLayerResponse(
+            window_id=window.window_id,
+            calculation_run_id=calculation_run_id,
+            track=None,
+            footprint=None,
+        )
+
+    track_geometry = build_track_line_geojson(
+        track_points=local_track_points,
+        aoi_geojson=aoi_geometry,
+    )
+
+    footprint_geometry = build_footprint_corridor_geojson(
+        track_points=local_track_points,
+        aoi_geojson=aoi_geometry,
+        swath_km=sensor.swath_km,
+    )
+
+    track = None
+
+    if track_geometry is not None:
+        track = TrackLayerRead(
+            satellite_id=satellite.satellite_id,
+            satellite_name=satellite.name,
+            geometry=track_geometry,
+        )
+
+    footprint = None
+
+    if footprint_geometry is not None:
+        footprint = FootprintLayerRead(
+            satellite_id=satellite.satellite_id,
+            satellite_name=satellite.name,
+            sensor_id=sensor.sensor_id,
+            sensor_name=sensor.name,
+            swath_km=float(sensor.swath_km) if sensor.swath_km is not None else None,
+            geometry=footprint_geometry,
+        )
+
+    return WindowMapLayerResponse(
+        window_id=window.window_id,
+        calculation_run_id=calculation_run_id,
+        track=track,
+        footprint=footprint,
     )

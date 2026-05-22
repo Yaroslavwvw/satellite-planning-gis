@@ -69,12 +69,35 @@ class ObservationWindowRead(BaseModel):
     off_nadir_deg: float | None = None
     observation_score: float | None = None
 
+class TrackLayerRead(BaseModel):
+    satellite_id: int
+    satellite_name: str
+    geometry: dict
+
+
+class FootprintLayerRead(BaseModel):
+    satellite_id: int
+    satellite_name: str
+    sensor_id: int
+    sensor_name: str
+    swath_km: float | None = None
+    geometry: dict
+
+
+class WindowMapLayerResponse(BaseModel):
+    window_id: int
+    calculation_run_id: int
+    track: TrackLayerRead | None = None
+    footprint: FootprintLayerRead | None = None
+
 
 class CalculationResultResponse(BaseModel):
     calculation_run: CalculationRead
     aoi: CalculationAoiRead
     satellite_ids: list[int]
     windows: list[ObservationWindowRead]
+    tracks: list[TrackLayerRead] = Field(default_factory=list)
+    footprints: list[FootprintLayerRead] = Field(default_factory=list)
 
 
 class CalculationPlaceholderResponse(BaseModel):

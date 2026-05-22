@@ -39,6 +39,8 @@ export type CalculationResultResponse = {
   aoi: CalculationAoi
   satellite_ids: number[]
   windows: ObservationWindow[]
+  tracks: TrackLayer[]
+  footprints: FootprintLayer[]
 }
 
 export type CalculationPlaceholderResponse = {
@@ -58,4 +60,41 @@ export type CalculationAoi = {
     type: 'Polygon'
     coordinates: number[][][]
   }
+}
+
+export type GeoJsonLineString = {
+  type: 'LineString'
+  coordinates: number[][]
+}
+
+export type GeoJsonPolygon = {
+  type: 'Polygon'
+  coordinates: number[][][]
+}
+
+export type GeoJsonMultiPolygon = {
+  type: 'MultiPolygon'
+  coordinates: number[][][][]
+}
+
+export type TrackLayer = {
+  satellite_id: number
+  satellite_name: string
+  geometry: GeoJsonLineString
+}
+
+export type FootprintLayer = {
+  satellite_id: number
+  satellite_name: string
+  sensor_id: number
+  sensor_name: string
+  swath_km: number | null
+  geometry: GeoJsonPolygon | GeoJsonMultiPolygon
+}
+
+export type WindowMapLayerResponse = {
+  window_id: number
+  calculation_run_id: number
+  track: TrackLayer | null
+  footprint: FootprintLayer | null
 }

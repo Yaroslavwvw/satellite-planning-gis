@@ -4,7 +4,19 @@ import type {
   CalculationRequest,
   CalculationResultResponse,
   CalculationRun,
+  WindowMapLayerResponse,
 } from '../types/calculation'
+
+export async function fetchWindowMapLayer(
+  calculationRunId: number,
+  windowId: number,
+): Promise<WindowMapLayerResponse> {
+  const { data } = await apiClient.get<WindowMapLayerResponse>(
+    `/api/calculations/${calculationRunId}/windows/${windowId}/map-layer`,
+  )
+
+  return data
+}
 
 export async function createCalculation(
   payload: CalculationRequest,

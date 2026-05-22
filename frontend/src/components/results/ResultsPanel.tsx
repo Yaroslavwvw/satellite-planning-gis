@@ -7,6 +7,9 @@ type Props = {
   isCalculating: boolean
   isCollapsed?: boolean
   onToggleCollapse?: () => void
+  selectedWindowId?: number | null
+  isLoadingWindowLayer?: boolean
+  onSelectWindow?: (windowId: number) => void
 }
 
 type ResultTab = 'windows' | 'satellites' | 'comparison'
@@ -59,6 +62,9 @@ export default function ResultsPanel({
   message,
   isCalculating,
   isCollapsed = false,
+  selectedWindowId = null,
+  isLoadingWindowLayer = false,
+  onSelectWindow,
   onToggleCollapse,
 }: Props) {
   const [activeTab, setActiveTab] = useState<ResultTab>('windows')
@@ -188,6 +194,10 @@ export default function ResultsPanel({
         <div>
           <div className="section-title">Результаты расчёта</div>
           {message && <div className="hint">{message}</div>}
+
+          {isLoadingWindowLayer && (
+            <span className="results-inline-status">Загрузка слоя карты...</span>
+          )}
         </div>
 
         <div className="results-actions">
@@ -306,7 +316,11 @@ export default function ResultsPanel({
               </div>
 
               {activeTab === 'windows' && (
-                <ObservationWindowsTable windows={filteredWindows} />
+                <ObservationWindowsTable
+                  windows={filteredWindows}
+                  selectedWindowId={selectedWindowId}
+                  onSelectWindow={onSelectWindow}
+                />
               )}
 
               {activeTab === 'satellites' && (
@@ -342,7 +356,15 @@ function KpiCard({
   )
 }
 
-function ObservationWindowsTable({ windows }: { windows: ObservationWindow[] }) {
+function ObservationWindowsTable({
+  windows,
+  selectedWindowId,
+  onSelectWindow,
+}: {
+  windows: ObservationWindow[]
+  selectedWindowId: number | null
+  onSelectWindow?: (windowId: number) => void
+}) {
   return (
     <div className="table-wrap">
       <table className="results-table">
@@ -353,14 +375,21 @@ function ObservationWindowsTable({ windows }: { windows: ObservationWindow[] }) 
             <th>Начало окна</th>
             <th>Конец окна</th>
             <th>Длит.</th>
-            <th>Угол наблюдения</th>
+            <th>Угол наблюд.</th>
             <th>Угол откл.</th>
             <th>Оценка</th>
           </tr>
         </thead>
+
         <tbody>
           {windows.map((item) => (
-            <tr key={item.window_id}>
+            <tr
+              key={item.window_id}
+              className={`result-row ${
+                selectedWindowId === item.window_id ? 'active' : ''
+              }`}
+              onClick={() => onSelectWindow?.(item.window_id)}
+            >
               <td>{item.satellite_name}</td>
               <td>{item.sensor_name}</td>
               <td>{formatDateTime(item.access_start)}</td>

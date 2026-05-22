@@ -6,12 +6,13 @@ import CalculationSidebar, {
   type CalculationFormValues,
 } from '../components/sidebar/CalculationSidebar'
 import { createAoi } from '../api/aois'
-import { createCalculation, fetchCalculationResults } from '../api/calculations'
+import { createCalculation, fetchCalculationResults, fetchWindowMapLayer, } from '../api/calculations'
 import { fetchSatellites } from '../api/satellites'
 import { updateTle } from '../api/tle'
 import { useCalculationContext } from '../context/CalculationContext'
 import type { GeoJsonPolygon } from '../api/aois'
 import type { Satellite } from '../types/satellite'
+import type { WindowMapLayerResponse } from '../types/calculation'
 
 const DEMO_AOI_POINTS: AoiPoint[] = [
   { lat: 55.2, lng: 36.5 },
@@ -72,6 +73,14 @@ export default function MainPage() {
   })
   const [aoiPoints, setAoiPoints] = useState<AoiPoint[]>([])
 
+  const [activeWindowLayer, setActiveWindowLayer] =
+  useState<WindowMapLayerResponse | null>(null)
+  const [isLoadingWindowLayer, setIsLoadingWindowLayer] = useState(false)
+
+  useEffect(() => {
+  setActiveWindowLayer(null)
+  }, [currentResult?.calculation_run.calculation_run_id])
+
   useEffect(() => {
     if (!currentResult?.aoi?.geometry) {
       return
@@ -96,6 +105,28 @@ export default function MainPage() {
 
     loadSatellites()
   }, [])
+
+  async function handleSelectWindow(windowId: number) {
+  if (!currentResult) {
+    return
+  }
+
+  try {
+    setIsLoadingWindowLayer(true)
+    setMessage('Загрузка трассы и зоны покрытия выбранного окна...')
+
+    const calculationRunId = currentResult.calculation_run.calculation_run_id
+    const layer = await fetchWindowMapLayer(calculationRunId, windowId)
+
+    setActiveWindowLayer(layer)
+    setMessage(`На карте показано окно №${windowId}`)
+  } catch (error) {
+    console.error(error)
+    setMessage('Не удалось загрузить трассу выбранного окна')
+  } finally {
+    setIsLoadingWindowLayer(false)
+  }
+}
 
   function handleAddAoiPoint(point: AoiPoint) {
     setAoiPoints((current) => [...current, point])
@@ -191,6 +222,8 @@ export default function MainPage() {
         <MapPanel
           aoiPoints={aoiPoints}
           isResultsCollapsed={isResultsCollapsed}
+          tracks={activeWindowLayer?.track ? [activeWindowLayer.track] : []}
+          footprints={activeWindowLayer?.footprint ? [activeWindowLayer.footprint] : []}
           onAddAoiPoint={handleAddAoiPoint}
         />
       }
@@ -200,6 +233,9 @@ export default function MainPage() {
           message={message}
           isCalculating={isCalculating}
           isCollapsed={isResultsCollapsed}
+          selectedWindowId={activeWindowLayer?.window_id ?? null}
+          isLoadingWindowLayer={isLoadingWindowLayer}
+          onSelectWindow={handleSelectWindow}
           onToggleCollapse={() => setIsResultsCollapsed((value) => !value)}
         />
       }
