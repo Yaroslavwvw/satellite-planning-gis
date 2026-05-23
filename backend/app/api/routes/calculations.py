@@ -27,15 +27,19 @@ from app.schemas.calculation import (
 from app.services.map_layers_service import (
     build_footprint_corridor_geojson,
     build_track_line_geojson,
+    calculate_footprint_coverage_details,
     select_track_segment_near_aoi,
 )
 from app.services.orbit_service import generate_satellite_track
-from app.services.visibility_service import detect_observation_windows
+from app.services.visibility_service import (
+    # calculate_coverage_percent,
+    detect_observation_windows,
+)
 
 router = APIRouter(prefix="/api/calculations", tags=["calculations"])
 
-MIN_WINDOW_DURATION_SEC = 120
-MIN_OBSERVATION_SCORE = 0.15
+MIN_WINDOW_DURATION_SEC = 30
+MIN_OBSERVATION_SCORE = 0
 
 WINDOW_LAYER_PADDING_MINUTES = 5
 WINDOW_LAYER_STEP_SECONDS = 120
@@ -47,6 +51,80 @@ def to_db_datetime(value: datetime) -> datetime:
 
     return value.astimezone(timezone.utc).replace(tzinfo=None)
 
+def build_window_layer_and_coverage(
+    satellite: Satellite,
+    sensor: Sensor,
+    tle_record: TLERecord,
+    aoi_geometry: dict,
+    access_start: datetime,
+    access_end: datetime,
+):
+    segment_start = access_start - timedelta(minutes=WINDOW_LAYER_PADDING_MINUTES)
+    segment_end = access_end + timedelta(minutes=WINDOW_LAYER_PADDING_MINUTES)
+
+    track_points = generate_satellite_track(
+        satellite_name=satellite.name,
+        line1=tle_record.line1,
+        line2=tle_record.line2,
+        start_time=segment_start,
+        end_time=segment_end,
+        step_seconds=WINDOW_LAYER_STEP_SECONDS,
+    )
+
+    local_track_points = select_track_segment_near_aoi(
+        track_points=track_points,
+        aoi_geojson=aoi_geometry,
+        points_before=3,
+        points_after=3,
+    )
+
+    if len(local_track_points) < 2:
+        coverage_details = calculate_footprint_coverage_details(
+            aoi_geojson=aoi_geometry,
+            footprint_geojson=None,
+        )
+
+        return None, None, coverage_details
+
+    track_geometry = build_track_line_geojson(
+        track_points=local_track_points,
+        aoi_geojson=aoi_geometry,
+    )
+
+    footprint_geometry = build_footprint_corridor_geojson(
+        track_points=local_track_points,
+        aoi_geojson=aoi_geometry,
+        swath_km=sensor.swath_km,
+    )
+
+    coverage_details = calculate_footprint_coverage_details(
+        aoi_geojson=aoi_geometry,
+        footprint_geojson=footprint_geometry,
+    )
+
+    track = None
+
+    if track_geometry is not None:
+        track = TrackLayerRead(
+            satellite_id=satellite.satellite_id,
+            satellite_name=satellite.name,
+            geometry=track_geometry,
+        )
+
+    footprint = None
+
+    if footprint_geometry is not None:
+        footprint = FootprintLayerRead(
+            satellite_id=satellite.satellite_id,
+            satellite_name=satellite.name,
+            sensor_id=sensor.sensor_id,
+            sensor_name=sensor.name,
+            swath_km=float(sensor.swath_km) if sensor.swath_km is not None else None,
+            geometry=footprint_geometry,
+        )
+
+    return track, footprint, coverage_details
+
 
 @router.post("", response_model=CalculationPlaceholderResponse)
 def create_calculation(payload: CalculationCreate, db: Session = Depends(get_db)):
@@ -54,6 +132,14 @@ def create_calculation(payload: CalculationCreate, db: Session = Depends(get_db)
 
     if aoi is None:
         raise HTTPException(status_code=404, detail="AOI not found")
+    
+    today = datetime.now(timezone.utc).date()
+
+    if payload.period_start.date() < today:
+        raise HTTPException(
+            status_code=400,
+            detail="period_start cannot be earlier than current date",
+        )
 
     if payload.mode == "selected":
         if not payload.satellite_ids:
@@ -175,6 +261,20 @@ def create_calculation(payload: CalculationCreate, db: Session = Depends(get_db)
                 ):
                     continue
 
+                try:
+                    _, _, coverage_details = build_window_layer_and_coverage(
+                        satellite=satellite,
+                        sensor=sensor,
+                        tle_record=current_tle,
+                        aoi_geometry=aoi_geometry,
+                        access_start=detected_window.access_start,
+                        access_end=detected_window.access_end,
+                    )
+                except ValueError:
+                    coverage_details = {"coverage_percent": None}
+
+                coverage_percent = coverage_details["coverage_percent"]
+
                 db.add(
                     ObservationWindow(
                         calculation_run_id=run.calculation_run_id,
@@ -187,6 +287,7 @@ def create_calculation(payload: CalculationCreate, db: Session = Depends(get_db)
                         max_elevation_deg=detected_window.max_elevation_deg,
                         off_nadir_deg=detected_window.off_nadir_deg,
                         observation_score=detected_window.observation_score,
+                        coverage_percent=coverage_percent,
                     )
                 )
 
@@ -268,6 +369,7 @@ def get_calculation_results(calculation_run_id: int, db: Session = Depends(get_d
             max_elevation_deg=row.ObservationWindow.max_elevation_deg,
             off_nadir_deg=row.ObservationWindow.off_nadir_deg,
             observation_score=row.ObservationWindow.observation_score,
+            coverage_percent=row.ObservationWindow.coverage_percent,
         )
         for row in rows
     ]
@@ -354,81 +456,26 @@ def get_window_map_layer(
 
     aoi_geometry = json.loads(aoi_geometry_raw)
 
-    segment_start = window.access_start - timedelta(
-        minutes=WINDOW_LAYER_PADDING_MINUTES
-    )
-    segment_end = window.access_end + timedelta(
-        minutes=WINDOW_LAYER_PADDING_MINUTES
-    )
-
     try:
-        track_points = generate_satellite_track(
-            satellite_name=satellite.name,
-            line1=tle_record.line1,
-            line2=tle_record.line2,
-            start_time=segment_start,
-            end_time=segment_end,
-            step_seconds=WINDOW_LAYER_STEP_SECONDS,
+        track, footprint, coverage_details = build_window_layer_and_coverage(
+            satellite=satellite,
+            sensor=sensor,
+            tle_record=tle_record,
+            aoi_geometry=aoi_geometry,
+            access_start=window.access_start,
+            access_end=window.access_end,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    local_track_points = select_track_segment_near_aoi(
-        track_points=track_points,
-        aoi_geojson=aoi_geometry,
-        points_before=3,
-        points_after=3,
-    )
-
-    # local_track_points = select_track_segment_near_aoi(
-    #     track_points=track_points,
-    #     aoi_geojson=aoi_geometry,
-    #     swath_km=sensor.swath_km,
-    # )   
-
-    if len(local_track_points) < 2:
-        return WindowMapLayerResponse(
-            window_id=window.window_id,
-            calculation_run_id=calculation_run_id,
-            track=None,
-            footprint=None,
-        )
-
-    track_geometry = build_track_line_geojson(
-        track_points=local_track_points,
-        aoi_geojson=aoi_geometry,
-    )
-
-    footprint_geometry = build_footprint_corridor_geojson(
-        track_points=local_track_points,
-        aoi_geojson=aoi_geometry,
-        swath_km=sensor.swath_km,
-    )
-
-    track = None
-
-    if track_geometry is not None:
-        track = TrackLayerRead(
-            satellite_id=satellite.satellite_id,
-            satellite_name=satellite.name,
-            geometry=track_geometry,
-        )
-
-    footprint = None
-
-    if footprint_geometry is not None:
-        footprint = FootprintLayerRead(
-            satellite_id=satellite.satellite_id,
-            satellite_name=satellite.name,
-            sensor_id=sensor.sensor_id,
-            sensor_name=sensor.name,
-            swath_km=float(sensor.swath_km) if sensor.swath_km is not None else None,
-            geometry=footprint_geometry,
-        )
 
     return WindowMapLayerResponse(
         window_id=window.window_id,
         calculation_run_id=calculation_run_id,
         track=track,
         footprint=footprint,
+        saved_coverage_percent=window.coverage_percent,
+        computed_coverage_percent=coverage_details["coverage_percent"],
+        aoi_area_km2=coverage_details["aoi_area_km2"],
+        footprint_area_km2=coverage_details["footprint_area_km2"],
+        intersection_area_km2=coverage_details["intersection_area_km2"],
     )

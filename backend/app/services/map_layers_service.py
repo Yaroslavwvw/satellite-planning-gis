@@ -290,6 +290,199 @@ def build_footprint_corridor_geojson(
 
     return _convert_web_mercator_geojson_to_lonlat(corridor_geojson_web_mercator)
 
+def _normalize_geojson_longitudes(
+    geometry: dict[str, Any],
+    center_longitude: float,
+) -> dict[str, Any]:
+    def normalize_coords(coords):
+        if not coords:
+            return coords
+
+        if isinstance(coords[0], (int, float)):
+            longitude = _normalize_longitude_near_center(coords[0], center_longitude)
+            return [longitude, coords[1]]
+
+        return [normalize_coords(item) for item in coords]
+
+    return {
+        **geometry,
+        "coordinates": normalize_coords(geometry["coordinates"]),
+    }
+
+
+def _make_geometry_valid(geometry):
+    if geometry.is_valid:
+        return geometry
+
+    fixed = geometry.buffer(0)
+
+    if fixed.is_empty:
+        return geometry
+
+    return fixed
+
+
+def calculate_footprint_coverage_percent(
+    aoi_geojson: dict[str, Any],
+    footprint_geojson: dict[str, Any] | None,
+) -> float | None:
+    if footprint_geojson is None:
+        return None
+
+    center_lon, _ = _get_aoi_centroid(aoi_geojson)
+
+    normalized_aoi_geojson = _normalize_geojson_longitudes(
+        aoi_geojson,
+        center_lon,
+    )
+
+    normalized_footprint_geojson = _normalize_geojson_longitudes(
+        footprint_geojson,
+        center_lon,
+    )
+
+    to_local = _get_local_aeqd_transformers(normalized_aoi_geojson)
+
+    aoi_local = transform(to_local.transform, shape(normalized_aoi_geojson))
+    footprint_local = transform(
+        to_local.transform,
+        shape(normalized_footprint_geojson),
+    )
+
+    aoi_local = _make_geometry_valid(aoi_local)
+    footprint_local = _make_geometry_valid(footprint_local)
+
+    if aoi_local.is_empty or footprint_local.is_empty:
+        return 0.0
+
+    if aoi_local.area <= 0:
+        return None
+
+    intersection = footprint_local.intersection(aoi_local)
+    intersection = _make_geometry_valid(intersection)
+
+    if intersection.is_empty:
+        return 0.0
+
+    coverage_percent = (intersection.area / aoi_local.area) * 100.0
+    coverage_percent = max(0.0, min(100.0, coverage_percent))
+
+    return round(coverage_percent, 1)
+
+
+def _normalize_geojson_longitudes(
+    geometry: dict[str, Any],
+    center_longitude: float,
+) -> dict[str, Any]:
+    def normalize_coords(coords):
+        if not coords:
+            return coords
+
+        if isinstance(coords[0], (int, float)):
+            longitude = _normalize_longitude_near_center(coords[0], center_longitude)
+            return [longitude, coords[1]]
+
+        return [normalize_coords(item) for item in coords]
+
+    return {
+        **geometry,
+        "coordinates": normalize_coords(geometry["coordinates"]),
+    }
+
+
+def _get_coverage_transformer(aoi_geojson: dict[str, Any]) -> Transformer:
+    center_lon, center_lat = _get_aoi_centroid(aoi_geojson)
+
+    local_crs = (
+        f"+proj=aeqd +lat_0={center_lat} +lon_0={center_lon} "
+        "+datum=WGS84 +units=m +no_defs"
+    )
+
+    return Transformer.from_crs(
+        "EPSG:4326",
+        local_crs,
+        always_xy=True,
+    )
+
+
+def _make_geometry_valid(geometry):
+    if geometry.is_valid:
+        return geometry
+
+    fixed = geometry.buffer(0)
+
+    if fixed.is_empty:
+        return geometry
+
+    return fixed
+
+
+def calculate_footprint_coverage_details(
+    aoi_geojson: dict[str, Any],
+    footprint_geojson: dict[str, Any] | None,
+) -> dict[str, float | None]:
+    if footprint_geojson is None:
+        return {
+            "coverage_percent": None,
+            "aoi_area_km2": None,
+            "footprint_area_km2": None,
+            "intersection_area_km2": None,
+        }
+
+    center_lon, _ = _get_aoi_centroid(aoi_geojson)
+
+    normalized_aoi_geojson = _normalize_geojson_longitudes(
+        aoi_geojson,
+        center_lon,
+    )
+
+    normalized_footprint_geojson = _normalize_geojson_longitudes(
+        footprint_geojson,
+        center_lon,
+    )
+
+    to_local = _get_coverage_transformer(normalized_aoi_geojson)
+
+    aoi_local = transform(to_local.transform, shape(normalized_aoi_geojson))
+    footprint_local = transform(
+        to_local.transform,
+        shape(normalized_footprint_geojson),
+    )
+
+    aoi_local = _make_geometry_valid(aoi_local)
+    footprint_local = _make_geometry_valid(footprint_local)
+
+    if aoi_local.is_empty or aoi_local.area <= 0:
+        return {
+            "coverage_percent": None,
+            "aoi_area_km2": None,
+            "footprint_area_km2": None,
+            "intersection_area_km2": None,
+        }
+
+    if footprint_local.is_empty:
+        return {
+            "coverage_percent": 0.0,
+            "aoi_area_km2": round(aoi_local.area / 1_000_000, 3),
+            "footprint_area_km2": 0.0,
+            "intersection_area_km2": 0.0,
+        }
+
+    intersection = footprint_local.intersection(aoi_local)
+    intersection = _make_geometry_valid(intersection)
+
+    intersection_area = 0.0 if intersection.is_empty else intersection.area
+
+    coverage_percent = (intersection_area / aoi_local.area) * 100.0
+    coverage_percent = max(0.0, min(100.0, coverage_percent))
+
+    return {
+        "coverage_percent": round(coverage_percent, 1),
+        "aoi_area_km2": round(aoi_local.area / 1_000_000, 3),
+        "footprint_area_km2": round(footprint_local.area / 1_000_000, 3),
+        "intersection_area_km2": round(intersection_area / 1_000_000, 3),
+    }
+
 # from typing import Any
 
 # from pyproj import Geod, Transformer
@@ -670,3 +863,4 @@ def build_footprint_corridor_geojson(
 #         "type": "Polygon",
 #         "coordinates": [polygon_ring],
 #     }
+

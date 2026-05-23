@@ -94,6 +94,13 @@ export default function CalculationSidebar({
   }
 
   function handleSubmit() {
+    const todayInputValue = new Date().toISOString().slice(0, 10)
+
+    if (periodStart < todayInputValue) {
+      alert('Дата начала расчёта не может быть раньше текущего дня')
+      return
+    }
+
     onCalculate({
       aoiName,
       periodStart,
@@ -162,6 +169,7 @@ export default function CalculationSidebar({
         id="periodStart"
         type="date"
         value={periodStart}
+        min={new Date().toISOString().slice(0, 10)}
         onChange={(event) => setPeriodStart(event.target.value)}
       />
 

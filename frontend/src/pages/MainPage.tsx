@@ -73,21 +73,38 @@ export default function MainPage() {
   })
   const [aoiPoints, setAoiPoints] = useState<AoiPoint[]>([])
 
-  const [activeWindowLayer, setActiveWindowLayer] =
-  useState<WindowMapLayerResponse | null>(null)
+  const [activeWindowLayers, setActiveWindowLayers] = useState<
+    WindowMapLayerResponse[]
+  >([])
   const [isLoadingWindowLayer, setIsLoadingWindowLayer] = useState(false)
 
   useEffect(() => {
-  setActiveWindowLayer(null)
-  }, [currentResult?.calculation_run.calculation_run_id])
+    const calculationRunId = currentResult?.calculation_run.calculation_run_id
 
-  useEffect(() => {
-    if (!currentResult?.aoi?.geometry) {
+    if (!calculationRunId) {
+      setActiveWindowLayers([])
       return
     }
 
-    setAoiPoints(geoJsonPolygonToAoiPoints(currentResult.aoi.geometry))
-  }, [currentResult])
+    try {
+      const raw = sessionStorage.getItem(getWindowLayersKey(calculationRunId))
+      setActiveWindowLayers(raw ? JSON.parse(raw) : [])
+    } catch {
+      setActiveWindowLayers([])
+    }
+  }, [currentResult?.calculation_run.calculation_run_id])
+
+  useEffect(() => {
+    setActiveWindowLayers([])
+  }, [currentResult?.calculation_run.calculation_run_id])
+
+    useEffect(() => {
+      if (!currentResult?.aoi?.geometry) {
+        return
+      }
+
+      setAoiPoints(geoJsonPolygonToAoiPoints(currentResult.aoi.geometry))
+    }, [currentResult])
 
   useEffect(() => {
     async function loadSatellites() {
@@ -106,27 +123,59 @@ export default function MainPage() {
     loadSatellites()
   }, [])
 
-  async function handleSelectWindow(windowId: number) {
-  if (!currentResult) {
-    return
-  }
-
-  try {
-    setIsLoadingWindowLayer(true)
-    setMessage('Загрузка трассы и зоны покрытия выбранного окна...')
+  async function handleToggleWindowLayer(windowId: number) {
+    if (!currentResult) {
+      return
+    }
 
     const calculationRunId = currentResult.calculation_run.calculation_run_id
-    const layer = await fetchWindowMapLayer(calculationRunId, windowId)
 
-    setActiveWindowLayer(layer)
-    setMessage(`На карте показано окно №${windowId}`)
-  } catch (error) {
-    console.error(error)
-    setMessage('Не удалось загрузить трассу выбранного окна')
-  } finally {
-    setIsLoadingWindowLayer(false)
+    const existingLayer = activeWindowLayers.find(
+      (layer) => layer.window_id === windowId,
+    )
+
+    if (existingLayer) {
+      const nextLayers = activeWindowLayers.filter(
+        (layer) => layer.window_id !== windowId,
+      )
+
+      setActiveWindowLayers(nextLayers)
+      saveActiveWindowLayers(calculationRunId, nextLayers)
+      setMessage(`Слой окна №${windowId} скрыт`)
+      return
+    }
+
+    try {
+      setIsLoadingWindowLayer(true)
+      setMessage('Загрузка трассы и зоны покрытия выбранного окна...')
+
+      const layer = await fetchWindowMapLayer(calculationRunId, windowId)
+      const nextLayers = [...activeWindowLayers, layer]
+
+      setActiveWindowLayers(nextLayers)
+      saveActiveWindowLayers(calculationRunId, nextLayers)
+      setMessage(`На карте показано окно №${windowId}`)
+    } catch (error) {
+      console.error(error)
+      setMessage('Не удалось загрузить трассу выбранного окна')
+    } finally {
+      setIsLoadingWindowLayer(false)
+    }
   }
-}
+
+  function saveActiveWindowLayers(
+    calculationRunId: number,
+    layers: WindowMapLayerResponse[],
+  ) {
+    sessionStorage.setItem(
+      getWindowLayersKey(calculationRunId),
+      JSON.stringify(layers),
+    )
+  }
+
+  function getWindowLayersKey(calculationRunId: number) {
+    return `satellitePlanning.windowLayers.${calculationRunId}`
+  }
 
   function handleAddAoiPoint(point: AoiPoint) {
     setAoiPoints((current) => [...current, point])
@@ -222,8 +271,15 @@ export default function MainPage() {
         <MapPanel
           aoiPoints={aoiPoints}
           isResultsCollapsed={isResultsCollapsed}
-          tracks={activeWindowLayer?.track ? [activeWindowLayer.track] : []}
-          footprints={activeWindowLayer?.footprint ? [activeWindowLayer.footprint] : []}
+          calculationRunId={currentResult?.calculation_run.calculation_run_id ?? null}
+          tracks={activeWindowLayers
+            .map((layer) => layer.track)
+            .filter((track): track is NonNullable<typeof track> => Boolean(track))}
+          footprints={activeWindowLayers
+            .map((layer) => layer.footprint)
+            .filter((footprint): footprint is NonNullable<typeof footprint> =>
+              Boolean(footprint),
+            )}
           onAddAoiPoint={handleAddAoiPoint}
         />
       }
@@ -233,9 +289,9 @@ export default function MainPage() {
           message={message}
           isCalculating={isCalculating}
           isCollapsed={isResultsCollapsed}
-          selectedWindowId={activeWindowLayer?.window_id ?? null}
+          selectedWindowIds={activeWindowLayers.map((layer) => layer.window_id)}
           isLoadingWindowLayer={isLoadingWindowLayer}
-          onSelectWindow={handleSelectWindow}
+          onToggleWindowLayer={handleToggleWindowLayer}
           onToggleCollapse={() => setIsResultsCollapsed((value) => !value)}
         />
       }

@@ -68,6 +68,7 @@ class ObservationWindowRead(BaseModel):
     max_elevation_deg: float | None = None
     off_nadir_deg: float | None = None
     observation_score: float | None = None
+    coverage_percent: float | None = None
 
 class TrackLayerRead(BaseModel):
     satellite_id: int
@@ -89,6 +90,12 @@ class WindowMapLayerResponse(BaseModel):
     calculation_run_id: int
     track: TrackLayerRead | None = None
     footprint: FootprintLayerRead | None = None
+
+    saved_coverage_percent: float | None = None
+    computed_coverage_percent: float | None = None
+    aoi_area_km2: float | None = None
+    footprint_area_km2: float | None = None
+    intersection_area_km2: float | None = None
 
 
 class CalculationResultResponse(BaseModel):

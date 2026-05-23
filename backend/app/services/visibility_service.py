@@ -1,10 +1,11 @@
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from math import atan, degrees
 from typing import Any
 
 from pyproj import Transformer
 from shapely.geometry import Point, shape
+from shapely.geometry import LineString
 from shapely.ops import transform
 
 
@@ -190,4 +191,80 @@ def detect_observation_windows(
         )
     )
 
+
     return windows
+
+
+def _to_naive_utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value
+
+    return value.astimezone(timezone.utc).replace(tzinfo=None)
+
+
+def calculate_coverage_percent(
+    track_points: list[dict[str, Any]],
+    aoi_geojson: dict[str, Any],
+    swath_km: float | None,
+    access_start: datetime,
+    access_end: datetime,
+) -> float | None:
+    if not track_points:
+        return None
+
+    if swath_km is None:
+        return None
+
+    swath_km_float = float(swath_km)
+
+    if swath_km_float <= 0:
+        return None
+
+    projected_aoi, transformer = _project_geometry_to_local_meters(aoi_geojson)
+
+    if projected_aoi.area <= 0:
+        return None
+
+    start_time = _to_naive_utc(access_start)
+    end_time = _to_naive_utc(access_end)
+
+    local_coordinates: list[tuple[float, float]] = []
+
+    for point in track_points:
+        point_time = _to_naive_utc(_parse_datetime(point["time_utc"]))
+
+        if point_time < start_time or point_time > end_time:
+            continue
+
+        longitude = point["longitude"]
+        latitude = point["latitude"]
+
+        x, y = transformer.transform(longitude, latitude)
+        local_coordinates.append((x, y))
+
+    if len(local_coordinates) < 2:
+        return None
+
+    line = LineString(local_coordinates)
+
+    half_swath_m = (swath_km_float * 1000.0) / 2.0
+
+    corridor = line.buffer(
+        half_swath_m,
+        cap_style=2,
+        join_style=2,
+    )
+
+    if corridor.is_empty:
+        return None
+
+    intersection = corridor.intersection(projected_aoi)
+
+    if intersection.is_empty:
+        return 0.0
+
+    coverage = (intersection.area / projected_aoi.area) * 100.0
+
+    coverage = max(0.0, min(100.0, coverage))
+
+    return round(coverage, 2)

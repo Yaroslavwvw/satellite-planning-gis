@@ -1,5 +1,9 @@
-import { useMemo, useState } from 'react'
-import type { CalculationResultResponse, ObservationWindow } from '../../types/calculation'
+import { useMemo, useState, type CSSProperties } from 'react'
+import type {
+  CalculationResultResponse,
+  ObservationWindow,
+} from '../../types/calculation'
+import { getSatelliteColor } from '../../utils/satelliteColors'
 
 type Props = {
   result: CalculationResultResponse | null
@@ -7,12 +11,21 @@ type Props = {
   isCalculating: boolean
   isCollapsed?: boolean
   onToggleCollapse?: () => void
-  selectedWindowId?: number | null
+  selectedWindowIds?: number[]
   isLoadingWindowLayer?: boolean
-  onSelectWindow?: (windowId: number) => void
+  onToggleWindowLayer?: (windowId: number) => void
 }
 
 type ResultTab = 'windows' | 'satellites' | 'comparison'
+
+type SatelliteSummary = {
+  satellite_id: number
+  satellite_name: string
+  sensors: string
+  windows_count: number
+  nearest_window: string
+  avg_coverage: string
+}
 
 function formatDateTime(value: string) {
   return new Date(value).toLocaleString('ru-RU', {
@@ -29,6 +42,14 @@ function formatDuration(seconds: number) {
   return `${minutes} мин`
 }
 
+function formatCoverage(value: number | null | undefined) {
+  if (value === null || value === undefined) {
+    return '—'
+  }
+
+  return `${value}%`
+}
+
 function buildCsv(windows: ObservationWindow[]) {
   const header = [
     'Спутник',
@@ -38,7 +59,7 @@ function buildCsv(windows: ObservationWindow[]) {
     'Длительность, сек',
     'Угол наблюдения',
     'Угол отклонения',
-    'Оценка',
+    'Покрытие AOI, %',
   ]
 
   const rows = windows.map((item) => [
@@ -49,7 +70,7 @@ function buildCsv(windows: ObservationWindow[]) {
     String(item.duration_sec),
     String(item.max_elevation_deg ?? ''),
     String(item.off_nadir_deg ?? ''),
-    String(item.observation_score ?? ''),
+    String(item.coverage_percent ?? ''),
   ])
 
   return [header, ...rows]
@@ -62,9 +83,9 @@ export default function ResultsPanel({
   message,
   isCalculating,
   isCollapsed = false,
-  selectedWindowId = null,
+  selectedWindowIds = [],
   isLoadingWindowLayer = false,
-  onSelectWindow,
+  onToggleWindowLayer,
   onToggleCollapse,
 }: Props) {
   const [activeTab, setActiveTab] = useState<ResultTab>('windows')
@@ -97,15 +118,21 @@ export default function ResultsPanel({
   const availableSatellites = new Set(windows.map((item) => item.satellite_id)).size
   const nearestWindow = windows[0]
 
-  const averageScore =
-    windows.length > 0
+  const windowsWithCoverage = windows.filter(
+    (item) => item.coverage_percent !== null && item.coverage_percent !== undefined,
+  )
+
+  const averageCoverage =
+    windowsWithCoverage.length > 0
       ? (
-          windows.reduce((sum, item) => sum + (item.observation_score ?? 0), 0) /
-          windows.length
-        ).toFixed(2)
+          windowsWithCoverage.reduce(
+            (sum, item) => sum + (item.coverage_percent ?? 0),
+            0,
+          ) / windowsWithCoverage.length
+        ).toFixed(1)
       : '—'
 
-  const satelliteSummaries = useMemo(() => {
+  const satelliteSummaries = useMemo<SatelliteSummary[]>(() => {
     const map = new Map<
       number,
       {
@@ -114,13 +141,15 @@ export default function ResultsPanel({
         sensors: Set<string>
         windows_count: number
         nearest_window: string
-        avg_score_sum: number
-        avg_score_count: number
+        avg_coverage_sum: number
+        avg_coverage_count: number
       }
     >()
 
     for (const item of windows) {
       const existing = map.get(item.satellite_id)
+      const hasCoverage =
+        item.coverage_percent !== null && item.coverage_percent !== undefined
 
       if (!existing) {
         map.set(item.satellite_id, {
@@ -129,8 +158,8 @@ export default function ResultsPanel({
           sensors: new Set([item.sensor_name]),
           windows_count: 1,
           nearest_window: item.access_start,
-          avg_score_sum: item.observation_score ?? 0,
-          avg_score_count: item.observation_score !== null ? 1 : 0,
+          avg_coverage_sum: hasCoverage ? item.coverage_percent ?? 0 : 0,
+          avg_coverage_count: hasCoverage ? 1 : 0,
         })
       } else {
         existing.sensors.add(item.sensor_name)
@@ -140,9 +169,9 @@ export default function ResultsPanel({
           existing.nearest_window = item.access_start
         }
 
-        if (item.observation_score !== null) {
-          existing.avg_score_sum += item.observation_score
-          existing.avg_score_count += 1
+        if (hasCoverage) {
+          existing.avg_coverage_sum += item.coverage_percent ?? 0
+          existing.avg_coverage_count += 1
         }
       }
     }
@@ -153,9 +182,9 @@ export default function ResultsPanel({
       sensors: Array.from(item.sensors).join(', '),
       windows_count: item.windows_count,
       nearest_window: item.nearest_window,
-      avg_score:
-        item.avg_score_count > 0
-          ? (item.avg_score_sum / item.avg_score_count).toFixed(2)
+      avg_coverage:
+        item.avg_coverage_count > 0
+          ? `${(item.avg_coverage_sum / item.avg_coverage_count).toFixed(1)}%`
           : '—',
     }))
   }, [windows])
@@ -252,19 +281,22 @@ export default function ResultsPanel({
                   value={availableSatellites.toString()}
                   subtitle="из каталога"
                 />
+
                 <KpiCard
                   title="Окон наблюдения"
                   value={windows.length.toString()}
                   subtitle="за период анализа"
                 />
+
                 <KpiCard
                   title="Ближайшее окно"
                   value={nearestWindow ? formatDateTime(nearestWindow.access_start) : '—'}
                   subtitle={nearestWindow?.satellite_name ?? ''}
                 />
+
                 <KpiCard
-                  title="Средняя оценка"
-                  value={averageScore}
+                  title="Среднее покрытие"
+                  value={averageCoverage !== '—' ? `${averageCoverage}%` : '—'}
                   subtitle="по найденным окнам"
                 />
               </div>
@@ -278,6 +310,7 @@ export default function ResultsPanel({
                   >
                     Окна наблюдения
                   </button>
+
                   <button
                     type="button"
                     className={activeTab === 'satellites' ? 'active' : ''}
@@ -285,6 +318,7 @@ export default function ResultsPanel({
                   >
                     Спутники
                   </button>
+
                   <button
                     type="button"
                     className={activeTab === 'comparison' ? 'active' : ''}
@@ -318,8 +352,8 @@ export default function ResultsPanel({
               {activeTab === 'windows' && (
                 <ObservationWindowsTable
                   windows={filteredWindows}
-                  selectedWindowId={selectedWindowId}
-                  onSelectWindow={onSelectWindow}
+                  selectedWindowIds={selectedWindowIds}
+                  onToggleWindowLayer={onToggleWindowLayer}
                 />
               )}
 
@@ -358,12 +392,12 @@ function KpiCard({
 
 function ObservationWindowsTable({
   windows,
-  selectedWindowId,
-  onSelectWindow,
+  selectedWindowIds,
+  onToggleWindowLayer,
 }: {
   windows: ObservationWindow[]
-  selectedWindowId: number | null
-  onSelectWindow?: (windowId: number) => void
+  selectedWindowIds: number[]
+  onToggleWindowLayer?: (windowId: number) => void
 }) {
   return (
     <div className="table-wrap">
@@ -377,47 +411,50 @@ function ObservationWindowsTable({
             <th>Длит.</th>
             <th>Угол наблюд.</th>
             <th>Угол откл.</th>
-            <th>Оценка</th>
+            <th>Покрытие AOI</th>
           </tr>
         </thead>
 
         <tbody>
-          {windows.map((item) => (
-            <tr
-              key={item.window_id}
-              className={`result-row ${
-                selectedWindowId === item.window_id ? 'active' : ''
-              }`}
-              onClick={() => onSelectWindow?.(item.window_id)}
-            >
-              <td>{item.satellite_name}</td>
-              <td>{item.sensor_name}</td>
-              <td>{formatDateTime(item.access_start)}</td>
-              <td>{formatDateTime(item.access_end)}</td>
-              <td>{formatDuration(item.duration_sec)}</td>
-              <td>{item.max_elevation_deg ?? '—'}°</td>
-              <td>{item.off_nadir_deg ?? '—'}°</td>
-              <td>{item.observation_score ?? '—'}</td>
-            </tr>
-          ))}
+          {windows.map((item) => {
+            const satelliteColor = getSatelliteColor(item.satellite_id)
+            const isActive = selectedWindowIds.includes(item.window_id)
+
+            return (
+              <tr
+                key={item.window_id}
+                className={`result-row ${isActive ? 'active' : ''}`}
+                style={
+                  {
+                    '--satellite-color': satelliteColor,
+                  } as CSSProperties
+                }
+                onClick={() => onToggleWindowLayer?.(item.window_id)}
+              >
+                <td>
+                  <span
+                    className="satellite-color-dot"
+                    style={{ backgroundColor: satelliteColor }}
+                  />
+                  {item.satellite_name}
+                </td>
+                <td>{item.sensor_name}</td>
+                <td>{formatDateTime(item.access_start)}</td>
+                <td>{formatDateTime(item.access_end)}</td>
+                <td>{formatDuration(item.duration_sec)}</td>
+                <td>{item.max_elevation_deg ?? '—'}°</td>
+                <td>{item.off_nadir_deg ?? '—'}°</td>
+                <td>{formatCoverage(item.coverage_percent)}</td>
+              </tr>
+            )
+          })}
         </tbody>
       </table>
     </div>
   )
 }
 
-function SatelliteSummaryTable({
-  satellites,
-}: {
-  satellites: {
-    satellite_id: number
-    satellite_name: string
-    sensors: string
-    windows_count: number
-    nearest_window: string
-    avg_score: string
-  }[]
-}) {
+function SatelliteSummaryTable({ satellites }: { satellites: SatelliteSummary[] }) {
   return (
     <div className="table-wrap">
       <table className="results-table">
@@ -427,9 +464,10 @@ function SatelliteSummaryTable({
             <th>Сенсоры</th>
             <th>Окон наблюдения</th>
             <th>Ближайшее окно</th>
-            <th>Средняя оценка</th>
+            <th>Среднее покрытие</th>
           </tr>
         </thead>
+
         <tbody>
           {satellites.map((item) => (
             <tr key={item.satellite_id}>
@@ -437,7 +475,7 @@ function SatelliteSummaryTable({
               <td>{item.sensors}</td>
               <td>{item.windows_count}</td>
               <td>{formatDateTime(item.nearest_window)}</td>
-              <td>{item.avg_score}</td>
+              <td>{item.avg_coverage}</td>
             </tr>
           ))}
         </tbody>
@@ -446,18 +484,7 @@ function SatelliteSummaryTable({
   )
 }
 
-function ComparisonTable({
-  satellites,
-}: {
-  satellites: {
-    satellite_id: number
-    satellite_name: string
-    sensors: string
-    windows_count: number
-    nearest_window: string
-    avg_score: string
-  }[]
-}) {
+function ComparisonTable({ satellites }: { satellites: SatelliteSummary[] }) {
   return (
     <div className="table-wrap">
       <table className="results-table">
@@ -469,6 +496,7 @@ function ComparisonTable({
             ))}
           </tr>
         </thead>
+
         <tbody>
           <tr>
             <td>Количество окон</td>
@@ -476,22 +504,25 @@ function ComparisonTable({
               <td key={item.satellite_id}>{item.windows_count}</td>
             ))}
           </tr>
+
           <tr>
             <td>Сенсор</td>
             {satellites.map((item) => (
               <td key={item.satellite_id}>{item.sensors}</td>
             ))}
           </tr>
+
           <tr>
             <td>Ближайшее окно</td>
             {satellites.map((item) => (
               <td key={item.satellite_id}>{formatDateTime(item.nearest_window)}</td>
             ))}
           </tr>
+
           <tr>
-            <td>Средняя оценка</td>
+            <td>Среднее покрытие</td>
             {satellites.map((item) => (
-              <td key={item.satellite_id}>{item.avg_score}</td>
+              <td key={item.satellite_id}>{item.avg_coverage}</td>
             ))}
           </tr>
         </tbody>

@@ -32,6 +32,7 @@ export type ObservationWindow = {
   max_elevation_deg: number | null
   off_nadir_deg: number | null
   observation_score: number | null
+  coverage_percent: number | null
 }
 
 export type CalculationResultResponse = {
@@ -97,4 +98,10 @@ export type WindowMapLayerResponse = {
   calculation_run_id: number
   track: TrackLayer | null
   footprint: FootprintLayer | null
+
+  saved_coverage_percent?: number | null
+  computed_coverage_percent?: number | null
+  aoi_area_km2?: number | null
+  footprint_area_km2?: number | null
+  intersection_area_km2?: number | null
 }
