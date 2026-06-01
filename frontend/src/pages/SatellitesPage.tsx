@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState } from 'react'
 import { fetchSatelliteSensors, fetchSatellites } from '../api/satellites'
 import type { Satellite, Sensor } from '../types/satellite'
 
+type SensorBand = Sensor['bands'][number]
+
 export default function SatellitesPage() {
   const [satellites, setSatellites] = useState<Satellite[]>([])
   const [selectedSatelliteId, setSelectedSatelliteId] = useState<number | null>(null)
@@ -149,7 +151,10 @@ export default function SatellitesPage() {
 
               <div className="satellite-kv-list">
                 <ParameterRow label="Наименование" value={selectedSatellite.name} />
-                <ParameterRow label="Страна / оператор" value={selectedSatellite.country ?? '—'} />
+                <ParameterRow
+                  label="Страна / оператор"
+                  value={selectedSatellite.country ?? '—'}
+                />
                 <ParameterRow label="Тип миссии" value={selectedSatellite.mission_type} />
                 <ParameterRow label="NORAD ID" value={selectedSatellite.norad_id} />
                 <ParameterRow label="Object ID" value={selectedSatellite.object_id ?? '—'} />
@@ -203,46 +208,66 @@ export default function SatellitesPage() {
 
               {sensors.length > 0 && (
                 <div className="sensor-grid">
-                  {sensors.map((sensor) => (
-                    <div key={sensor.sensor_id} className="sensor-card">
-                      <div className="sensor-card-header">
-                        <strong>{sensor.name}</strong>
-                        <span>{sensor.sensor_type}</span>
+                  {sensors.map((sensor) => {
+                    const detailedBands = getDetailedBands(sensor)
+                    const bestResolution = getBestResolution(detailedBands)
+
+                    return (
+                      <div key={sensor.sensor_id} className="sensor-card">
+                        <div className="sensor-card-header">
+                          <strong>{sensor.name}</strong>
+                          <span>{formatSensorType(sensor.sensor_type)}</span>
+                        </div>
+
+                        <div className="sensor-card-body">
+                          <div>
+                            <span>Полоса захвата</span>
+                            <strong>
+                              {sensor.swath_km !== null ? `${sensor.swath_km} км` : '—'}
+                            </strong>
+                          </div>
+
+                          <div>
+                            <span>Лучшее разрешение</span>
+                            <strong>
+                              {bestResolution !== null ? `${bestResolution} м` : '—'}
+                            </strong>
+                          </div>
+
+                          <div>
+                            <span>Детальные каналы</span>
+                            <strong>{detailedBands.length}</strong>
+                          </div>
+                        </div>
+
+                        {detailedBands.length > 0 ? (
+                          <div className="sensor-bands-list">
+                            {detailedBands.map((band) => (
+                              <div key={band.band_id} className="sensor-band-row">
+                                <span>
+                                  <strong>{formatBandCode(band)}</strong>
+                                  {' · '}
+                                  {band.band_name ?? 'Канал без названия'}
+                                </span>
+
+                                <span>{formatBandRange(band)}</span>
+
+                                <strong>{formatBandResolution(band)}</strong>
+
+                                <small>{formatBandType(band.band_type)}</small>
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <p className="muted-text">
+                            Детальные каналы для этого сенсора пока не внесены.
+                          </p>
+                        )}
+
+                        {sensor.notes && <p>{sensor.notes}</p>}
                       </div>
-
-                      <div className="sensor-card-body">
-                        <div>
-                          <span>Полоса захвата</span>
-                          <strong>
-                            {sensor.swath_km !== null ? `${sensor.swath_km} км` : '—'}
-                          </strong>
-                        </div>
-
-                        <div>
-                          <span>Разрешение</span>
-                          <strong>{formatResolutions(sensor)}</strong>
-                        </div>
-
-                        <div>
-                          <span>Диапазоны</span>
-                          <strong>{sensor.bands.length}</strong>
-                        </div>
-                      </div>
-
-                      {sensor.bands.length > 0 && (
-                        <div className="sensor-bands-list">
-                          {sensor.bands.map((band) => (
-                            <div key={band.band_id}>
-                              <span>{band.band_name}</span>
-                              <strong>{band.spatial_resolution_m} м</strong>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-
-                      {sensor.notes && <p>{sensor.notes}</p>}
-                    </div>
-                  ))}
+                    )
+                  })}
                 </div>
               )}
             </section>
@@ -253,16 +278,82 @@ export default function SatellitesPage() {
   )
 }
 
-function formatResolutions(sensor: Sensor) {
-  if (!sensor.bands.length) {
+function getDetailedBands(sensor: Sensor) {
+  return sensor.bands
+    .filter((band) => !band.is_grouped)
+    .sort((a, b) => compareBandCode(a.band_code, b.band_code))
+}
+
+function compareBandCode(a: string | null, b: string | null) {
+  if (!a && !b) return 0
+  if (!a) return 1
+  if (!b) return -1
+
+  const numberA = Number(a.replace(/[^\d]/g, ''))
+  const numberB = Number(b.replace(/[^\d]/g, ''))
+
+  if (!Number.isNaN(numberA) && !Number.isNaN(numberB) && numberA !== numberB) {
+    return numberA - numberB
+  }
+
+  return a.localeCompare(b)
+}
+
+function getBestResolution(bands: SensorBand[]) {
+  const resolutions = bands
+    .map((band) => band.spatial_resolution_m)
+    .filter((value): value is number => value !== null && value !== undefined)
+
+  if (resolutions.length === 0) {
+    return null
+  }
+
+  return Math.min(...resolutions)
+}
+
+function formatBandCode(band: SensorBand) {
+  return band.band_code ?? '—'
+}
+
+function formatBandRange(band: SensorBand) {
+  if (
+    band.wavelength_min_nm === null ||
+    band.wavelength_min_nm === undefined ||
+    band.wavelength_max_nm === null ||
+    band.wavelength_max_nm === undefined
+  ) {
+    return 'Диапазон не указан'
+  }
+
+  return `${band.wavelength_min_nm}–${band.wavelength_max_nm} нм`
+}
+
+function formatBandResolution(band: SensorBand) {
+  if (band.spatial_resolution_m === null || band.spatial_resolution_m === undefined) {
     return '—'
   }
 
-  const resolutions = Array.from(
-    new Set(sensor.bands.map((band) => band.spatial_resolution_m)),
-  ).sort((a, b) => a - b)
+  return `${band.spatial_resolution_m} м`
+}
 
-  return `${resolutions.join(' / ')} м`
+function formatBandType(value: string | null) {
+  if (!value) {
+    return 'тип не указан'
+  }
+
+  const labels: Record<string, string> = {
+    optical: 'optical',
+    thermal: 'thermal',
+    panchromatic: 'panchromatic',
+    sar: 'SAR',
+    multispectral: 'multispectral',
+  }
+
+  return labels[value] ?? value
+}
+
+function formatSensorType(value: string | null) {
+  return value ?? 'тип не указан'
 }
 
 function ParameterRow({

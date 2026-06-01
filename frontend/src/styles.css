@@ -1410,3 +1410,21 @@ button {
   font-size: 12px;
   box-shadow: 0 2px 8px rgba(15, 23, 42, 0.12);
 }
+
+.map-status-overlay {
+  position: absolute;
+  left: 14px;
+  right: auto;
+  bottom: 8px;
+  z-index: 900;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.92);
+  color: #64748b;
+  font-size: 12px;
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.12);
+}
+
+.leaflet-control-attribution {
+  display: none !important;
+}

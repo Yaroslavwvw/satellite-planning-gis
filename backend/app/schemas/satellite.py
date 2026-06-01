@@ -4,9 +4,16 @@ from pydantic import BaseModel, ConfigDict
 class SensorBandRead(BaseModel):
     band_id: int
     sensor_id: int
-    band_name: str
+    # band_name: str
     spectral_range_nm: str | None = None
     spatial_resolution_m: float
+
+    band_code: str | None = None
+    band_name: str | None = None
+    wavelength_min_nm: float | None = None
+    wavelength_max_nm: float | None = None
+    band_type: str | None = None
+    is_grouped: bool = False
 
     model_config = ConfigDict(from_attributes=True)
 

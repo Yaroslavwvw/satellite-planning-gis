@@ -15,9 +15,15 @@ export type Satellite = {
 export type SensorBand = {
   band_id: number
   sensor_id: number
-  band_name: string
+  // band_name: string
   spectral_range_nm: string | null
   spatial_resolution_m: number
+  band_code: string | null
+  band_name: string | null
+  wavelength_min_nm: number | null
+  wavelength_max_nm: number | null
+  band_type: string | null
+  is_grouped: boolean
 }
 
 export type Sensor = {

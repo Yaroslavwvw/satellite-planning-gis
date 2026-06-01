@@ -6,20 +6,17 @@ import CalculationSidebar, {
   type CalculationFormValues,
 } from '../components/sidebar/CalculationSidebar'
 import { createAoi } from '../api/aois'
-import { createCalculation, fetchCalculationResults, fetchWindowMapLayer, } from '../api/calculations'
+import {
+  createCalculation,
+  fetchCalculationResults,
+  fetchWindowMapLayer,
+} from '../api/calculations'
 import { fetchSatellites } from '../api/satellites'
 import { updateTle } from '../api/tle'
 import { useCalculationContext } from '../context/CalculationContext'
 import type { GeoJsonPolygon } from '../api/aois'
 import type { Satellite } from '../types/satellite'
 import type { WindowMapLayerResponse } from '../types/calculation'
-
-const DEMO_AOI_POINTS: AoiPoint[] = [
-  { lat: 55.2, lng: 36.5 },
-  { lat: 55.2, lng: 38.5 },   
-  { lat: 56.2, lng: 38.5 },
-  { lat: 56.2, lng: 36.5 },
-]
 
 function buildGeoJsonPolygon(points: AoiPoint[]): GeoJsonPolygon {
   const coordinates = points.map((point) => [point.lng, point.lat])
@@ -32,9 +29,7 @@ function buildGeoJsonPolygon(points: AoiPoint[]): GeoJsonPolygon {
 
   return {
     type: 'Polygon',
-    coordinates: [
-      isClosed ? coordinates : [...coordinates, firstPoint],
-    ],
+    coordinates: [isClosed ? coordinates : [...coordinates, firstPoint]],
   }
 }
 
@@ -58,21 +53,43 @@ function geoJsonPolygonToAoiPoints(geometry: GeoJsonPolygon): AoiPoint[] {
   return points
 }
 
+function getWindowLayersKey(calculationRunId: number) {
+  return `satellitePlanning.windowLayers.${calculationRunId}`
+}
+
+function clearMapSessionState() {
+  for (let index = sessionStorage.length - 1; index >= 0; index -= 1) {
+    const key = sessionStorage.key(index)
+
+    if (
+      key?.startsWith('satellitePlanning.windowLayers.') ||
+      key?.startsWith('satellitePlanning.mapView.')
+    ) {
+      sessionStorage.removeItem(key)
+    }
+  }
+}
+
 export default function MainPage() {
-  const { currentResult, saveCalculationResult } = useCalculationContext()
+  const {
+    currentResult,
+    saveCalculationResult,
+    clearCalculationResult,
+  } = useCalculationContext()
 
   const [satellites, setSatellites] = useState<Satellite[]>([])
   const [message, setMessage] = useState<string>('')
   const [isLoadingSatellites, setIsLoadingSatellites] = useState(false)
   const [isCalculating, setIsCalculating] = useState(false)
   const [isUpdatingTle, setIsUpdatingTle] = useState(false)
-
   const [isResultsCollapsed, setIsResultsCollapsed] = useState(false)
+  const [sidebarResetKey, setSidebarResetKey] = useState(0)
+
   const [lastTleUpdate, setLastTleUpdate] = useState<string | null>(() => {
     return sessionStorage.getItem('satellitePlanning.lastTleUpdate')
   })
-  const [aoiPoints, setAoiPoints] = useState<AoiPoint[]>([])
 
+  const [aoiPoints, setAoiPoints] = useState<AoiPoint[]>([])
   const [activeWindowLayers, setActiveWindowLayers] = useState<
     WindowMapLayerResponse[]
   >([])
@@ -95,16 +112,12 @@ export default function MainPage() {
   }, [currentResult?.calculation_run.calculation_run_id])
 
   useEffect(() => {
-    setActiveWindowLayers([])
-  }, [currentResult?.calculation_run.calculation_run_id])
+    if (!currentResult?.aoi?.geometry) {
+      return
+    }
 
-    useEffect(() => {
-      if (!currentResult?.aoi?.geometry) {
-        return
-      }
-
-      setAoiPoints(geoJsonPolygonToAoiPoints(currentResult.aoi.geometry))
-    }, [currentResult])
+    setAoiPoints(geoJsonPolygonToAoiPoints(currentResult.aoi.geometry))
+  }, [currentResult])
 
   useEffect(() => {
     async function loadSatellites() {
@@ -173,10 +186,6 @@ export default function MainPage() {
     )
   }
 
-  function getWindowLayersKey(calculationRunId: number) {
-    return `satellitePlanning.windowLayers.${calculationRunId}`
-  }
-
   function handleAddAoiPoint(point: AoiPoint) {
     setAoiPoints((current) => [...current, point])
   }
@@ -186,9 +195,15 @@ export default function MainPage() {
     setMessage('AOI очищена')
   }
 
-  function handleUseDemoAoi() {
-    setAoiPoints(DEMO_AOI_POINTS)
-    setMessage('Демо AOI добавлена на карту')
+  function handleNewCalculation() {
+    setAoiPoints([])
+    setActiveWindowLayers([])
+    setMessage('')
+    setIsResultsCollapsed(false)
+    setSidebarResetKey((value) => value + 1)
+
+    clearCalculationResult()
+    clearMapSessionState()
   }
 
   async function handleCalculate(values: CalculationFormValues) {
@@ -252,6 +267,7 @@ export default function MainPage() {
       isResultsCollapsed={isResultsCollapsed}
       sidebar={
         <CalculationSidebar
+          resetKey={sidebarResetKey}
           satellites={satellites}
           isLoadingSatellites={isLoadingSatellites}
           isCalculating={isCalculating}
@@ -264,7 +280,7 @@ export default function MainPage() {
           onCalculate={handleCalculate}
           onUpdateTle={handleUpdateTle}
           onClearAoi={handleClearAoi}
-          onUseDemoAoi={handleUseDemoAoi}
+          onNewCalculation={handleNewCalculation}
         />
       }
       map={

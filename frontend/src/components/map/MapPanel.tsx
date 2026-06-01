@@ -220,6 +220,7 @@ export default function MapPanel({
         />
 
         <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
+        
 
         <MapClickHandler onAddAoiPoint={onAddAoiPoint} />
 

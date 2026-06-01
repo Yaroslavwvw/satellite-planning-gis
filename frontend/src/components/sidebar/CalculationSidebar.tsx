@@ -13,6 +13,7 @@ export type CalculationFormValues = {
 }
 
 type Props = {
+  resetKey: number
   satellites: Satellite[]
   isLoadingSatellites: boolean
   isCalculating: boolean
@@ -25,14 +26,25 @@ type Props = {
   onCalculate: (values: CalculationFormValues) => void
   onUpdateTle: () => void
   onClearAoi: () => void
-  onUseDemoAoi: () => void
+  onNewCalculation: () => void
 }
 
 function formatDate(date: Date) {
   return date.toISOString().slice(0, 10)
 }
 
+function getTodayDate() {
+  return formatDate(new Date())
+}
+
+function getDefaultEndDate() {
+  const date = new Date()
+  date.setDate(date.getDate() + 2)
+  return formatDate(date)
+}
+
 export default function CalculationSidebar({
+  resetKey,
   satellites,
   isLoadingSatellites,
   isCalculating,
@@ -45,21 +57,25 @@ export default function CalculationSidebar({
   onCalculate,
   onUpdateTle,
   onClearAoi,
-  onUseDemoAoi,
+  onNewCalculation,
 }: Props) {
-  const today = useMemo(() => new Date(), [])
-  const plusTwoDays = useMemo(() => {
-    const date = new Date()
-    date.setDate(date.getDate() + 2)
-    return date
-  }, [])
+  const todayInputValue = useMemo(() => getTodayDate(), [])
 
   const [aoiName, setAoiName] = useState('')
-  const [periodStart, setPeriodStart] = useState(formatDate(today))
-  const [periodEnd, setPeriodEnd] = useState(formatDate(plusTwoDays))
+  const [periodStart, setPeriodStart] = useState(getTodayDate)
+  const [periodEnd, setPeriodEnd] = useState(getDefaultEndDate)
   const [stepSeconds, setStepSeconds] = useState(60)
   const [mode, setMode] = useState<'all_catalog' | 'selected'>('all_catalog')
   const [satelliteIds, setSatelliteIds] = useState<number[]>([])
+
+  useEffect(() => {
+    setAoiName('')
+    setPeriodStart(getTodayDate())
+    setPeriodEnd(getDefaultEndDate())
+    setStepSeconds(60)
+    setMode('all_catalog')
+    setSatelliteIds([])
+  }, [resetKey])
 
   useEffect(() => {
     if (currentAoiName) {
@@ -94,10 +110,15 @@ export default function CalculationSidebar({
   }
 
   function handleSubmit() {
-    const todayInputValue = new Date().toISOString().slice(0, 10)
+    const currentToday = getTodayDate()
 
-    if (periodStart < todayInputValue) {
+    if (periodStart < currentToday) {
       alert('Дата начала расчёта не может быть раньше текущего дня')
+      return
+    }
+
+    if (periodEnd <= periodStart) {
+      alert('Дата окончания должна быть позже даты начала')
       return
     }
 
@@ -112,8 +133,8 @@ export default function CalculationSidebar({
   }
 
   function formatCoordinate(value: number) {
-  return value.toFixed(5)
-}
+    return value.toFixed(5)
+  }
 
   return (
     <aside className="sidebar">
@@ -134,8 +155,8 @@ export default function CalculationSidebar({
       </div>
 
       <div className="sidebar-button-row">
-        <button type="button" className="secondary-button" onClick={onUseDemoAoi}>
-          Демо AOI
+        <button type="button" className="secondary-button" onClick={onNewCalculation}>
+          Новый расчёт
         </button>
 
         <button type="button" className="secondary-button" onClick={onClearAoi}>
@@ -169,7 +190,7 @@ export default function CalculationSidebar({
         id="periodStart"
         type="date"
         value={periodStart}
-        min={new Date().toISOString().slice(0, 10)}
+        min={todayInputValue}
         onChange={(event) => setPeriodStart(event.target.value)}
       />
 
@@ -178,6 +199,7 @@ export default function CalculationSidebar({
         id="periodEnd"
         type="date"
         value={periodEnd}
+        min={periodStart}
         onChange={(event) => setPeriodEnd(event.target.value)}
       />
 
@@ -273,11 +295,6 @@ export default function CalculationSidebar({
         <div>
           <span>Период анализа</span>
           <strong>до 7 суток</strong>
-        </div>
-
-        <div>
-          <span>Текущий режим</span>
-          <strong>прототипные окна наблюдения</strong>
         </div>
       </div>
     </aside>

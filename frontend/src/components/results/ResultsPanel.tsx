@@ -57,8 +57,8 @@ function buildCsv(windows: ObservationWindow[]) {
     'Начало окна',
     'Конец окна',
     'Длительность, сек',
-    'Угол наблюдения',
-    'Угол отклонения',
+    // 'Угол наблюдения',
+    // 'Угол отклонения',
     'Покрытие AOI, %',
   ]
 
@@ -68,8 +68,8 @@ function buildCsv(windows: ObservationWindow[]) {
     item.access_start,
     item.access_end,
     String(item.duration_sec),
-    String(item.max_elevation_deg ?? ''),
-    String(item.off_nadir_deg ?? ''),
+    // String(item.max_elevation_deg ?? ''),
+    // String(item.off_nadir_deg ?? ''),
     String(item.coverage_percent ?? ''),
   ])
 
@@ -409,8 +409,8 @@ function ObservationWindowsTable({
             <th>Начало окна</th>
             <th>Конец окна</th>
             <th>Длит.</th>
-            <th>Угол наблюд.</th>
-            <th>Угол откл.</th>
+            {/* <th>Угол наблюд.</th>
+            <th>Угол откл.</th> */}
             <th>Покрытие AOI</th>
           </tr>
         </thead>
@@ -442,8 +442,8 @@ function ObservationWindowsTable({
                 <td>{formatDateTime(item.access_start)}</td>
                 <td>{formatDateTime(item.access_end)}</td>
                 <td>{formatDuration(item.duration_sec)}</td>
-                <td>{item.max_elevation_deg ?? '—'}°</td>
-                <td>{item.off_nadir_deg ?? '—'}°</td>
+                {/* <td>{item.max_elevation_deg ?? '—'}°</td>
+                <td>{item.off_nadir_deg ?? '—'}°</td> */}
                 <td>{formatCoverage(item.coverage_percent)}</td>
               </tr>
             )

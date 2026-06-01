@@ -43,6 +43,7 @@ MIN_OBSERVATION_SCORE = 0
 
 WINDOW_LAYER_PADDING_MINUTES = 5
 WINDOW_LAYER_STEP_SECONDS = 120
+MIN_COVERAGE_PERCENT = 0.1
 
 
 def to_db_datetime(value: datetime) -> datetime:
@@ -274,6 +275,9 @@ def create_calculation(payload: CalculationCreate, db: Session = Depends(get_db)
                     coverage_details = {"coverage_percent": None}
 
                 coverage_percent = coverage_details["coverage_percent"]
+
+                if coverage_percent is None or coverage_percent < MIN_COVERAGE_PERCENT:
+                    continue
 
                 db.add(
                     ObservationWindow(

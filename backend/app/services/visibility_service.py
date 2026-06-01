@@ -32,17 +32,23 @@ def _project_geometry_to_local_meters(aoi_geojson: dict[str, Any]):
     aoi_geometry = shape(aoi_geojson)
     centroid = aoi_geometry.centroid
 
-    epsg = _get_utm_epsg(centroid.x, centroid.y)
+    center_lon = centroid.x
+    center_lat = centroid.y
+
+    local_crs = (
+        f"+proj=aeqd +lat_0={center_lat} +lon_0={center_lon} "
+        "+datum=WGS84 +units=m +no_defs"
+    )
 
     transformer = Transformer.from_crs(
         "EPSG:4326",
-        f"EPSG:{epsg}",
+        local_crs,
         always_xy=True,
     )
 
-    projected_aoi = transform(transformer.transform, aoi_geometry)
+    projected_geometry = transform(transformer.transform, aoi_geometry)
 
-    return projected_aoi, transformer
+    return projected_geometry, transformer
 
 
 def _calculate_metrics(distance_km: float, altitude_km: float, half_swath_km: float):
