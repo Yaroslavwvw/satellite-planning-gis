@@ -1,9 +1,31 @@
-import { useMemo, useState, type CSSProperties } from 'react'
+import {
+  useMemo,
+  useState,
+  type CSSProperties,
+  type Dispatch,
+  type SetStateAction,
+} from 'react'
 import type {
   CalculationResultResponse,
   ObservationWindow,
 } from '../../types/calculation'
+import type { Satellite, Sensor } from '../../types/satellite'
 import { getSatelliteColor } from '../../utils/satelliteColors'
+import {
+  DEFAULT_OBSERVATION_FILTERS,
+  OBSERVATION_TASK_LABELS,
+  SPECTRAL_BAND_GROUP_LABELS,
+  type DataAccessFilter,
+  type MaxResolutionFilter,
+  type ObservationFilters,
+  type ObservationTask,
+  type SensorTypeFilter,
+  type SpectralBandGroup,
+  getAnalysisResolutionM,
+  getMatchingBandLines,
+  hasUsedBands,
+  isWindowSuitableByFilters,
+} from '../../utils/observationFilters'
 
 type Props = {
   result: CalculationResultResponse | null
@@ -14,6 +36,9 @@ type Props = {
   selectedWindowIds?: number[]
   isLoadingWindowLayer?: boolean
   onToggleWindowLayer?: (windowId: number) => void
+  satellites: Satellite[]
+  sensorCatalog: Record<number, Sensor[]>
+
 }
 
 type ResultTab = 'windows' | 'satellites' | 'comparison'
@@ -50,28 +75,51 @@ function formatCoverage(value: number | null | undefined) {
   return `${value}%`
 }
 
-function buildCsv(windows: ObservationWindow[]) {
+function formatResolution(value: number | null) {
+  if (value === null || value === undefined) {
+    return '—'
+  }
+
+  return `${value} м`
+}
+
+function buildCsv(
+  windows: ObservationWindow[],
+  sensorById: Map<number, Sensor>,
+  filters: ObservationFilters,
+) {
+  const showUsedBands = hasUsedBands(filters)
+
   const header = [
     'Спутник',
     'Сенсор',
     'Начало окна',
     'Конец окна',
     'Длительность, сек',
-    // 'Угол наблюдения',
-    // 'Угол отклонения',
     'Покрытие AOI, %',
+    'Разрешение анализа, м',
+    ...(showUsedBands ? ['Используемые каналы'] : []),
   ]
 
-  const rows = windows.map((item) => [
-    item.satellite_name,
-    item.sensor_name,
-    item.access_start,
-    item.access_end,
-    String(item.duration_sec),
-    // String(item.max_elevation_deg ?? ''),
-    // String(item.off_nadir_deg ?? ''),
-    String(item.coverage_percent ?? ''),
-  ])
+  const rows = windows.map((item) => {
+    const sensor = sensorById.get(item.sensor_id)
+    const analysisResolution = getAnalysisResolutionM(filters, sensor)
+    const matchingBandLines = getMatchingBandLines(filters, sensor)
+    const resolution = getAnalysisResolutionM(filters, sensor)
+
+    return [
+      item.satellite_name,
+      item.sensor_name,
+      item.access_start,
+      item.access_end,
+      String(item.duration_sec),
+      String(item.coverage_percent ?? ''),
+      resolution !== null ? String(resolution) : '',
+      ...(showUsedBands
+        ? [getMatchingBandLines(filters, sensor).join(' | ')]
+        : []),
+    ]
+  })
 
   return [header, ...rows]
     .map((row) => row.map((cell) => `"${cell.replace(/"/g, '""')}"`).join(';'))
@@ -87,20 +135,51 @@ export default function ResultsPanel({
   isLoadingWindowLayer = false,
   onToggleWindowLayer,
   onToggleCollapse,
+  satellites = [],
+  sensorCatalog = {},
 }: Props) {
   const [activeTab, setActiveTab] = useState<ResultTab>('windows')
   const [satelliteFilter, setSatelliteFilter] = useState('all')
   const [searchQuery, setSearchQuery] = useState('')
+  const [filters, setFilters] = useState<ObservationFilters>(
+    DEFAULT_OBSERVATION_FILTERS,
+  )
 
-  const windows = result?.windows ?? []
+  const allWindows = result?.windows ?? []
+
+  const satelliteById = useMemo(() => {
+    return new Map(satellites.map((satellite) => [satellite.satellite_id, satellite]))
+  }, [satellites])
+
+  const sensorById = useMemo(() => {
+    const entries = Object.values(sensorCatalog)
+      .flat()
+      .map((sensor) => [sensor.sensor_id, sensor] as const)
+
+    return new Map(entries)
+  }, [sensorCatalog])
+
+  const observationFilteredWindows = useMemo(() => {
+    return allWindows.filter((window) => {
+      const satellite = satelliteById.get(window.satellite_id)
+      const sensor = sensorById.get(window.sensor_id)
+
+      return isWindowSuitableByFilters({
+        window,
+        satellite,
+        sensor,
+        filters,
+      })
+    })
+  }, [allWindows, satelliteById, sensorById, filters])
 
   const satelliteOptions = useMemo(() => {
-    const names = Array.from(new Set(windows.map((item) => item.satellite_name)))
+    const names = Array.from(new Set(allWindows.map((item) => item.satellite_name)))
     return names.sort((a, b) => a.localeCompare(b))
-  }, [windows])
+  }, [allWindows])
 
   const filteredWindows = useMemo(() => {
-    return windows.filter((item) => {
+    return observationFilteredWindows.filter((item) => {
       const matchesSatellite =
         satelliteFilter === 'all' || item.satellite_name === satelliteFilter
 
@@ -113,12 +192,12 @@ export default function ResultsPanel({
 
       return matchesSatellite && matchesSearch
     })
-  }, [windows, satelliteFilter, searchQuery])
+  }, [observationFilteredWindows, satelliteFilter, searchQuery])
 
-  const availableSatellites = new Set(windows.map((item) => item.satellite_id)).size
-  const nearestWindow = windows[0]
+  const availableSatellites = new Set(allWindows.map((item) => item.satellite_id)).size
+  const nearestWindow = allWindows[0]
 
-  const windowsWithCoverage = windows.filter(
+  const windowsWithCoverage = allWindows.filter(
     (item) => item.coverage_percent !== null && item.coverage_percent !== undefined,
   )
 
@@ -146,7 +225,7 @@ export default function ResultsPanel({
       }
     >()
 
-    for (const item of windows) {
+    for (const item of observationFilteredWindows) {
       const existing = map.get(item.satellite_id)
       const hasCoverage =
         item.coverage_percent !== null && item.coverage_percent !== undefined
@@ -187,7 +266,7 @@ export default function ResultsPanel({
           ? `${(item.avg_coverage_sum / item.avg_coverage_count).toFixed(1)}%`
           : '—',
     }))
-  }, [windows])
+  }, [observationFilteredWindows])
 
   function copyResultLink() {
     if (!result) return
@@ -201,7 +280,7 @@ export default function ResultsPanel({
   function exportCsv() {
     if (!result || filteredWindows.length === 0) return
 
-    const csv = buildCsv(filteredWindows)
+    const csv = buildCsv(filteredWindows, sensorById, filters)
     const blob = new Blob([csv], {
       type: 'text/csv;charset=utf-8;',
     })
@@ -253,7 +332,7 @@ export default function ResultsPanel({
       {isCollapsed && (
         <div className="collapsed-summary">
           {result
-            ? `Расчёт №${result.calculation_run.calculation_run_id}: ${windows.length} окон наблюдения, ${availableSatellites} спутников`
+            ? `Расчёт №${result.calculation_run.calculation_run_id}: ${allWindows.length} окон наблюдения, ${availableSatellites} спутников`
             : 'Результаты свернуты'}
         </div>
       )}
@@ -284,7 +363,7 @@ export default function ResultsPanel({
 
                 <KpiCard
                   title="Окон наблюдения"
-                  value={windows.length.toString()}
+                  value={allWindows.length.toString()}
                   subtitle="за период анализа"
                 />
 
@@ -350,11 +429,22 @@ export default function ResultsPanel({
               </div>
 
               {activeTab === 'windows' && (
-                <ObservationWindowsTable
-                  windows={filteredWindows}
-                  selectedWindowIds={selectedWindowIds}
-                  onToggleWindowLayer={onToggleWindowLayer}
-                />
+                <>
+                  <ObservationFiltersPanel
+                    filters={filters}
+                    allWindowsCount={allWindows.length}
+                    visibleWindowsCount={filteredWindows.length}
+                    onChange={setFilters}
+                  />
+
+                  <ObservationWindowsTable
+                    windows={filteredWindows}
+                    selectedWindowIds={selectedWindowIds}
+                    sensorById={sensorById}
+                    filters={filters}
+                    onToggleWindowLayer={onToggleWindowLayer}
+                  />
+                </>
               )}
 
               {activeTab === 'satellites' && (
@@ -369,6 +459,162 @@ export default function ResultsPanel({
         </>
       )}
     </section>
+  )
+}
+
+function ObservationFiltersPanel({
+  filters,
+  allWindowsCount,
+  visibleWindowsCount,
+  onChange,
+}: {
+  filters: ObservationFilters
+  allWindowsCount: number
+  visibleWindowsCount: number
+  onChange: Dispatch<SetStateAction<ObservationFilters>>
+}) {
+
+function toggleBandGroup(group: SpectralBandGroup) {
+  onChange((current) => {
+    const exists = current.manualBandGroups.includes(group)
+
+    return {
+      ...current,
+      manualBandGroups: exists
+        ? current.manualBandGroups.filter((item) => item !== group)
+        : [...current.manualBandGroups, group],
+    }
+  })
+} 
+
+  return (
+    <div className="results-filters">
+      <div className="results-filters-title">Фильтры задачи наблюдения</div>
+
+      <div className="results-filters-grid">
+        <label>
+          Задача
+          <select
+            value={filters.task}
+            onChange={(event) =>
+              onChange((current) => ({
+                ...current,
+                task: event.target.value as ObservationTask,
+              }))
+            }
+          >
+            {Object.entries(OBSERVATION_TASK_LABELS).map(([value, label]) => (
+              <option key={value} value={value}>
+                {label}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <label>
+          Мин. покрытие AOI
+          <select
+            value={filters.minCoveragePercent}
+            onChange={(event) =>
+              onChange((current) => ({
+                ...current,
+                minCoveragePercent: Number(event.target.value),
+              }))
+            }
+          >
+            <option value={0}>любое</option>
+            <option value={10}>от 10%</option>
+            <option value={25}>от 25%</option>
+            <option value={50}>от 50%</option>
+            <option value={75}>от 75%</option>
+          </select>
+        </label>
+
+        <label>
+          Макс. разрешение
+          <select
+            value={filters.maxResolutionM}
+            onChange={(event) => {
+              const value = event.target.value
+
+              onChange((current) => ({
+                ...current,
+                maxResolutionM:
+                  value === 'any'
+                    ? 'any'
+                    : (Number(value) as MaxResolutionFilter),
+              }))
+            }}
+          >
+            <option value="any">любое</option>
+            <option value={10}>до 10 м</option>
+            <option value={30}>до 30 м</option>
+            <option value={100}>до 100 м</option>
+            <option value={1000}>до 1000 м</option>
+          </select>
+        </label>
+
+        <label>
+          Тип данных
+          <select
+            value={filters.dataAccess}
+            onChange={(event) =>
+              onChange((current) => ({
+                ...current,
+                dataAccess: event.target.value as DataAccessFilter,
+              }))
+            }
+          >
+            <option value="any">любые</option>
+            <option value="open">только открытые</option>
+          </select>
+        </label>
+
+        <label>
+          Тип сенсора
+          <select
+            value={filters.sensorType}
+            onChange={(event) =>
+              onChange((current) => ({
+                ...current,
+                sensorType: event.target.value as SensorTypeFilter,
+              }))
+            }
+          >
+            <option value="any">любой</option>
+            <option value="optical">optical</option>
+            <option value="thermal">thermal</option>
+            <option value="sar">SAR</option>
+          </select>
+        </label>
+        <div className="spectral-groups-filter">
+          <span className="spectral-groups-filter-title">
+            Спектральные группы
+          </span>
+
+          <div className="band-filter-grid">
+            {Object.entries(SPECTRAL_BAND_GROUP_LABELS).map(([value, label]) => {
+              const group = value as SpectralBandGroup
+
+              return (
+                <label key={group} className="band-filter-chip">
+                  <input
+                    type="checkbox"
+                    checked={filters.manualBandGroups.includes(group)}
+                    onChange={() => toggleBandGroup(group)}
+                  />
+                  <span>{label}</span>
+                </label>
+              )
+            })}
+          </div>
+        </div>
+      </div>
+
+      <div className="results-filters-summary">
+        Показано {visibleWindowsCount} из {allWindowsCount} окон
+      </div>
+    </div>
   )
 }
 
@@ -393,15 +639,46 @@ function KpiCard({
 function ObservationWindowsTable({
   windows,
   selectedWindowIds,
+  sensorById,
+  filters,
   onToggleWindowLayer,
 }: {
   windows: ObservationWindow[]
   selectedWindowIds: number[]
+  sensorById: Map<number, Sensor>
+  filters: ObservationFilters
   onToggleWindowLayer?: (windowId: number) => void
 }) {
+
+  const showUsedBands = hasUsedBands(filters)
+
   return (
     <div className="table-wrap">
       <table className="results-table">
+        <colgroup>
+          {showUsedBands ? (
+            <>
+              <col style={{ width: '14%' }} />
+              <col style={{ width: '9%' }} />
+              <col style={{ width: '13%' }} />
+              <col style={{ width: '13%' }} />
+              <col style={{ width: '7%' }} />
+              <col style={{ width: '10%' }} />
+              <col style={{ width: '10%' }} />
+              <col style={{ width: '24%' }} />
+            </>
+          ) : (
+            <>
+              <col style={{ width: '18%' }} />
+              <col style={{ width: '13%' }} />
+              <col style={{ width: '17%' }} />
+              <col style={{ width: '17%' }} />
+              <col style={{ width: '10%' }} />
+              <col style={{ width: '13%' }} />
+              <col style={{ width: '12%' }} />
+            </>
+          )}
+        </colgroup>
         <thead>
           <tr>
             <th>Спутник</th>
@@ -409,9 +686,9 @@ function ObservationWindowsTable({
             <th>Начало окна</th>
             <th>Конец окна</th>
             <th>Длит.</th>
-            {/* <th>Угол наблюд.</th>
-            <th>Угол откл.</th> */}
             <th>Покрытие AOI</th>
+            <th>Разрешение анализа</th>
+            {showUsedBands && <th>Используемые каналы</th>}
           </tr>
         </thead>
 
@@ -419,6 +696,9 @@ function ObservationWindowsTable({
           {windows.map((item) => {
             const satelliteColor = getSatelliteColor(item.satellite_id)
             const isActive = selectedWindowIds.includes(item.window_id)
+            const sensor = sensorById.get(item.sensor_id)
+            const analysisResolution = getAnalysisResolutionM(filters, sensor)
+            const matchingBandLines = getMatchingBandLines(filters, sensor)
 
             return (
               <tr
@@ -442,9 +722,23 @@ function ObservationWindowsTable({
                 <td>{formatDateTime(item.access_start)}</td>
                 <td>{formatDateTime(item.access_end)}</td>
                 <td>{formatDuration(item.duration_sec)}</td>
-                {/* <td>{item.max_elevation_deg ?? '—'}°</td>
-                <td>{item.off_nadir_deg ?? '—'}°</td> */}
                 <td>{formatCoverage(item.coverage_percent)}</td>
+                <td>{formatResolution(analysisResolution)}</td>
+
+                  {showUsedBands && (
+                    <td className="used-bands-cell">
+                      <div className="used-bands-list">
+                        {matchingBandLines.map((line) => (
+                          <div key={line} className="used-band-item">
+                            {line}
+                          </div>
+                        ))}
+                      </div>
+                    </td>
+                  )}
+                <td className="used-bands-cell">
+                  {/* {getMatchingBandsLabel(filters.task, sensor)} */}
+                </td>
               </tr>
             )
           })}

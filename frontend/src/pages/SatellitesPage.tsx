@@ -155,6 +155,10 @@ export default function SatellitesPage() {
                   label="Страна / оператор"
                   value={selectedSatellite.country ?? '—'}
                 />
+                <ParameterRow
+                  label="Доступность данных"
+                  value={formatDataAccessType(selectedSatellite.data_access_type)}
+                />
                 <ParameterRow label="Тип миссии" value={selectedSatellite.mission_type} />
                 <ParameterRow label="NORAD ID" value={selectedSatellite.norad_id} />
                 <ParameterRow label="Object ID" value={selectedSatellite.object_id ?? '—'} />
@@ -211,6 +215,8 @@ export default function SatellitesPage() {
                   {sensors.map((sensor) => {
                     const detailedBands = getDetailedBands(sensor)
                     const bestResolution = getBestResolution(detailedBands)
+                    const defaultMode =
+                      sensor.modes?.find((mode) => mode.is_default) ?? sensor.modes?.[0] ?? null
 
                     return (
                       <div key={sensor.sensor_id} className="sensor-card">
@@ -223,14 +229,23 @@ export default function SatellitesPage() {
                           <div>
                             <span>Полоса захвата</span>
                             <strong>
-                              {sensor.swath_km !== null ? `${sensor.swath_km} км` : '—'}
+                              {defaultMode?.swath_km !== null && defaultMode?.swath_km !== undefined
+                                ? `${defaultMode.swath_km} км`
+                                : sensor.swath_km !== null
+                                  ? `${sensor.swath_km} км`
+                                  : '—'}
                             </strong>
                           </div>
 
                           <div>
                             <span>Лучшее разрешение</span>
                             <strong>
-                              {bestResolution !== null ? `${bestResolution} м` : '—'}
+                              {defaultMode?.spatial_resolution_m !== null &&
+                              defaultMode?.spatial_resolution_m !== undefined
+                                ? `${defaultMode.spatial_resolution_m} м`
+                                : bestResolution !== null
+                                  ? `${bestResolution} м`
+                                  : '—'}
                             </strong>
                           </div>
 
@@ -238,7 +253,31 @@ export default function SatellitesPage() {
                             <span>Детальные каналы</span>
                             <strong>{detailedBands.length}</strong>
                           </div>
+
+                          <div>
+                            <span>Макс. угол отклонения</span>
+                            <strong>{formatOffNadir(defaultMode?.max_off_nadir_deg ?? null)}</strong>
+                          </div>
                         </div>
+
+                        {sensor.modes && sensor.modes.length > 0 && (
+                          <div className="sensor-modes-list">
+                            <div className="sensor-modes-title">Режимы съёмки</div>
+
+                            {sensor.modes.map((mode) => (
+                              <div key={mode.sensor_mode_id} className="sensor-mode-row">
+                                <strong>{mode.mode_name}</strong>
+                                <span>{mode.swath_km !== null ? `${mode.swath_km} км` : '—'}</span>
+                                <span>
+                                  {mode.spatial_resolution_m !== null
+                                    ? `${mode.spatial_resolution_m} м`
+                                    : '—'}
+                                </span>
+                                <span>{formatOffNadir(mode.max_off_nadir_deg)}</span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
 
                         {detailedBands.length > 0 ? (
                           <div className="sensor-bands-list">
@@ -371,6 +410,31 @@ function ParameterRow({
       <strong>{value}</strong>
     </div>
   )
+}
+
+function formatOffNadir(value: number | null) {
+  if (value === null || value === undefined) {
+    return '—'
+  }
+
+  return `${value}°`
+}
+
+function formatDataAccessType(value: string | null) {
+  if (!value) {
+    return 'не уточнено'
+  }
+
+  const labels: Record<string, string> = {
+    open: 'открытые',
+    limited_open: 'частично открытые',
+    commercial: 'коммерческие',
+    restricted: 'ограниченные',
+    public_metadata_only: 'только публичные метаданные',
+    unknown: 'не уточнено',
+  }
+
+  return labels[value] ?? value
 }
 
 // import { useEffect, useMemo, useState } from 'react'

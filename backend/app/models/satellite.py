@@ -1,4 +1,4 @@
-from sqlalchemy import Integer, Numeric, String, Text
+from sqlalchemy import Integer, Numeric, String, Text, Float
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
@@ -18,6 +18,8 @@ class Satellite(Base):
     orbital_period_min: Mapped[float | None] = mapped_column(Numeric(8, 3), nullable=True)
     avg_altitude_km: Mapped[float | None] = mapped_column(Numeric(8, 3), nullable=True)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    data_access_type: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    data_access_note: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     sensors = relationship("Sensor", back_populates="satellite")
     tle_records = relationship("TLERecord", back_populates="satellite")

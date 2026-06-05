@@ -11,12 +11,12 @@ import {
   fetchCalculationResults,
   fetchWindowMapLayer,
 } from '../api/calculations'
-import { fetchSatellites } from '../api/satellites'
+import { fetchSatelliteSensors, fetchSatellites } from '../api/satellites'
 import { updateTle } from '../api/tle'
 import { useCalculationContext } from '../context/CalculationContext'
 import type { GeoJsonPolygon } from '../api/aois'
-import type { Satellite } from '../types/satellite'
 import type { WindowMapLayerResponse } from '../types/calculation'
+import type { Satellite, Sensor } from '../types/satellite'
 
 function buildGeoJsonPolygon(points: AoiPoint[]): GeoJsonPolygon {
   const coordinates = points.map((point) => [point.lng, point.lat])
@@ -78,6 +78,8 @@ export default function MainPage() {
   } = useCalculationContext()
 
   const [satellites, setSatellites] = useState<Satellite[]>([])
+  const [sensorCatalog, setSensorCatalog] = useState<Record<number, Sensor[]>>({})
+
   const [message, setMessage] = useState<string>('')
   const [isLoadingSatellites, setIsLoadingSatellites] = useState(false)
   const [isCalculating, setIsCalculating] = useState(false)
@@ -136,6 +138,41 @@ export default function MainPage() {
     loadSatellites()
   }, [])
 
+  useEffect(() => {
+    async function loadSensorCatalog() {
+      if (satellites.length === 0) {
+        setSensorCatalog({})
+        return
+      }
+
+      try {
+        const entries = await Promise.all(
+          satellites.map(async (satellite) => {
+            const sensors = await fetchSatelliteSensors(satellite.satellite_id)
+            return [satellite.satellite_id, sensors] as const
+          }),
+        )
+
+        setSensorCatalog(Object.fromEntries(entries))
+      } catch (error) {
+        console.error(error)
+        setMessage('Не удалось загрузить характеристики сенсоров')
+      }
+    }
+
+    loadSensorCatalog()
+  }, [satellites])
+
+  function saveActiveWindowLayers(
+    calculationRunId: number,
+    layers: WindowMapLayerResponse[],
+  ) {
+    sessionStorage.setItem(
+      getWindowLayersKey(calculationRunId),
+      JSON.stringify(layers),
+    )
+  }
+
   async function handleToggleWindowLayer(windowId: number) {
     if (!currentResult) {
       return
@@ -174,16 +211,6 @@ export default function MainPage() {
     } finally {
       setIsLoadingWindowLayer(false)
     }
-  }
-
-  function saveActiveWindowLayers(
-    calculationRunId: number,
-    layers: WindowMapLayerResponse[],
-  ) {
-    sessionStorage.setItem(
-      getWindowLayersKey(calculationRunId),
-      JSON.stringify(layers),
-    )
   }
 
   function handleAddAoiPoint(point: AoiPoint) {
@@ -251,6 +278,7 @@ export default function MainPage() {
       const response = await updateTle({ satellite_ids: null })
 
       setMessage(`TLE обновлены: ${response.updated_records} записей`)
+
       const updatedAt = new Date().toLocaleString('ru-RU')
       setLastTleUpdate(updatedAt)
       sessionStorage.setItem('satellitePlanning.lastTleUpdate', updatedAt)
@@ -287,7 +315,9 @@ export default function MainPage() {
         <MapPanel
           aoiPoints={aoiPoints}
           isResultsCollapsed={isResultsCollapsed}
-          calculationRunId={currentResult?.calculation_run.calculation_run_id ?? null}
+          calculationRunId={
+            currentResult?.calculation_run.calculation_run_id ?? null
+          }
           tracks={activeWindowLayers
             .map((layer) => layer.track)
             .filter((track): track is NonNullable<typeof track> => Boolean(track))}
@@ -307,6 +337,8 @@ export default function MainPage() {
           isCollapsed={isResultsCollapsed}
           selectedWindowIds={activeWindowLayers.map((layer) => layer.window_id)}
           isLoadingWindowLayer={isLoadingWindowLayer}
+          satellites={satellites}
+          sensorCatalog={sensorCatalog}
           onToggleWindowLayer={handleToggleWindowLayer}
           onToggleCollapse={() => setIsResultsCollapsed((value) => !value)}
         />
