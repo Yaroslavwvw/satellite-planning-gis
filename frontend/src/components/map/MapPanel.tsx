@@ -24,6 +24,7 @@ type Props = {
   calculationRunId?: number | null
   tracks?: TrackLayer[]
   footprints?: FootprintLayer[]
+  reachableFootprints?: FootprintLayer[]
   onAddAoiPoint: (point: AoiPoint) => void
 }
 
@@ -192,6 +193,7 @@ export default function MapPanel({
   calculationRunId = null,
   tracks = [],
   footprints = [],
+  reachableFootprints = [],
   onAddAoiPoint,
 }: Props) {
   const initialView = readStoredMapView(getMapViewKey(calculationRunId))
@@ -216,13 +218,51 @@ export default function MapPanel({
           calculationRunId={calculationRunId}
           isResultsCollapsed={isResultsCollapsed}
           tracksCount={tracks.length}
-          footprintsCount={footprints.length}
+          footprintsCount={footprints.length + reachableFootprints.length}
         />
 
         <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
         
 
         <MapClickHandler onAddAoiPoint={onAddAoiPoint} />
+
+        {reachableFootprints.map((footprint, footprintIndex) => {
+          const color = getSatelliteColor(footprint.satellite_id)
+
+          if (footprint.geometry.type === 'Polygon') {
+            return (
+              <Polygon
+                key={`reachable-footprint-${footprint.satellite_id}-${footprint.sensor_id}-${footprintIndex}`}
+                positions={polygonToPositions(footprint.geometry.coordinates)}
+                pathOptions={{
+                  color,
+                  weight: 1.5,
+                  fillColor: color,
+                  fillOpacity: 0.04,
+                  opacity: 0.3,
+                  dashArray: '8 6',
+                }}
+              />
+            )
+          }
+
+          return multiPolygonToPositions(footprint.geometry.coordinates).map(
+            (positions, index) => (
+              <Polygon
+                key={`reachable-footprint-${footprint.satellite_id}-${footprint.sensor_id}-${footprintIndex}-${index}`}
+                positions={positions}
+                pathOptions={{
+                  color,
+                  weight: 1.5,
+                  fillColor: color,
+                  fillOpacity: 0.04,
+                  opacity: 0.3,
+                  dashArray: '8 6',
+                }}
+              />
+            ),
+          )
+        })}
 
         {footprints.map((footprint, footprintIndex) => {
           const color = getSatelliteColor(footprint.satellite_id)

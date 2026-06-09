@@ -36,6 +36,10 @@ export type ObservationWindow = {
   sun_elevation_deg: number | null
   is_daylight: boolean | null
   daylight_required: boolean
+  max_off_nadir_deg: number | null
+  required_off_nadir_deg: number | null
+  requires_pointing: boolean
+  reachable_coverage_percent: number | null
 }
 
 export type CalculationResultResponse = {
@@ -101,6 +105,7 @@ export type WindowMapLayerResponse = {
   calculation_run_id: number
   track: TrackLayer | null
   footprint: FootprintLayer | null
+  reachable_footprint: FootprintLayer | null
 
   saved_coverage_percent?: number | null
   computed_coverage_percent?: number | null

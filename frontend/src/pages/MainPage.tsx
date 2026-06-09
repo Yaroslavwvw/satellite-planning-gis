@@ -336,6 +336,11 @@ export default function MainPage() {
             .filter((footprint): footprint is NonNullable<typeof footprint> =>
               Boolean(footprint),
             )}
+          reachableFootprints={activeWindowLayers
+            .map((layer) => layer.reachable_footprint)
+            .filter((footprint): footprint is NonNullable<typeof footprint> =>
+              Boolean(footprint),
+            )}
           onAddAoiPoint={handleAddAoiPoint}
         />
       }

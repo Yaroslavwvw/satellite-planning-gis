@@ -483,6 +483,78 @@ def calculate_footprint_coverage_details(
         "intersection_area_km2": round(intersection_area / 1_000_000, 3),
     }
 
+
+def _normalize_max_off_nadir_deg(value: float | None) -> float | None:
+    if value is None:
+        return None
+
+    value_float = float(value)
+
+    if value_float <= 0:
+        return None
+
+    return value_float
+
+
+def _get_average_altitude_km(track_points: list[dict[str, Any]]) -> float | None:
+    altitude_values: list[float] = []
+
+    for point in track_points:
+        altitude_km = point.get("altitude_km")
+
+        if altitude_km is not None:
+            altitude_values.append(float(altitude_km))
+
+    if not altitude_values:
+        return None
+
+    return sum(altitude_values) / len(altitude_values)
+
+
+def build_reachable_footprint_corridor_geojson(
+    track_points: list[dict[str, Any]],
+    aoi_geojson: dict[str, Any],
+    swath_km: float | None,
+    max_off_nadir_deg: float | None,
+) -> dict[str, Any] | None:
+    """
+    Строит визуальную зону возможного бокового наведения.
+
+    Важно:
+    - это не фактический снимок;
+    - это расширенная зона достижимости AOI при допустимом off-nadir;
+    - обычный footprint остаётся отдельным слоем.
+    """
+    if swath_km is None:
+        return None
+
+    swath_km_float = float(swath_km)
+
+    if swath_km_float <= 0:
+        return None
+
+    normalized_max_off_nadir_deg = _normalize_max_off_nadir_deg(max_off_nadir_deg)
+
+    if normalized_max_off_nadir_deg is None:
+        return None
+
+    average_altitude_km = _get_average_altitude_km(track_points)
+
+    if average_altitude_km is None or average_altitude_km <= 0:
+        return None
+
+    max_side_shift_km = average_altitude_km * math.tan(
+        math.radians(normalized_max_off_nadir_deg),
+    )
+
+    reachable_swath_km = swath_km_float + 2.0 * max_side_shift_km
+
+    return build_footprint_corridor_geojson(
+        track_points=track_points,
+        aoi_geojson=aoi_geojson,
+        swath_km=reachable_swath_km,
+    )
+
 # from typing import Any
 
 # from pyproj import Geod, Transformer

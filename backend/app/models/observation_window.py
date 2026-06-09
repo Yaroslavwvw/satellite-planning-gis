@@ -45,5 +45,9 @@ class ObservationWindow(Base):
     sun_elevation_deg: Mapped[float | None] = mapped_column(Float, nullable=True)
     is_daylight: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     daylight_required: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    max_off_nadir_deg: Mapped[float | None] = mapped_column(Float, nullable=True)
+    required_off_nadir_deg: Mapped[float | None] = mapped_column(Float, nullable=True)
+    requires_pointing: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    reachable_coverage_percent: Mapped[float | None] = mapped_column(Float, nullable=True)
 
     calculation_run = relationship("CalculationRun", back_populates="observation_windows")

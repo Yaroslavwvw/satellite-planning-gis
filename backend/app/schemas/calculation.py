@@ -72,6 +72,10 @@ class ObservationWindowRead(BaseModel):
     sun_elevation_deg: float | None = None
     is_daylight: bool | None = None
     daylight_required: bool = False
+    max_off_nadir_deg: float | None = None
+    required_off_nadir_deg: float | None = None
+    requires_pointing: bool = False
+    reachable_coverage_percent: float | None = None
 
 class TrackLayerRead(BaseModel):
     satellite_id: int
@@ -93,6 +97,7 @@ class WindowMapLayerResponse(BaseModel):
     calculation_run_id: int
     track: TrackLayerRead | None = None
     footprint: FootprintLayerRead | None = None
+    reachable_footprint: FootprintLayerRead | None = None
 
     saved_coverage_percent: float | None = None
     computed_coverage_percent: float | None = None

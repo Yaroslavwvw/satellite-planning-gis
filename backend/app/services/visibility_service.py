@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from math import atan, degrees
+from math import atan, degrees, radians, tan
 from typing import Any
 
 from pyproj import Transformer
@@ -20,6 +20,9 @@ class DetectedObservationWindow:
     observation_score: float | None
     sun_elevation_deg: float | None = None
     is_daylight: bool | None = None
+    max_off_nadir_deg: float | None = None
+    required_off_nadir_deg: float | None = None
+    requires_pointing: bool = False
 
 
 def _parse_datetime(value: str) -> datetime:
@@ -54,6 +57,50 @@ def _project_geometry_to_local_meters(aoi_geojson: dict[str, Any]):
     return projected_geometry, transformer
 
 
+def _normalize_max_off_nadir_deg(value: float | None) -> float | None:
+    if value is None:
+        return None
+
+    value_float = float(value)
+
+    if value_float <= 0:
+        return None
+
+    return value_float
+
+
+def _calculate_max_side_shift_km(
+    altitude_km: float,
+    max_off_nadir_deg: float | None,
+) -> float:
+    if altitude_km <= 0:
+        return 0.0
+
+    normalized_max_off_nadir_deg = _normalize_max_off_nadir_deg(max_off_nadir_deg)
+
+    if normalized_max_off_nadir_deg is None:
+        return 0.0
+
+    return altitude_km * tan(radians(normalized_max_off_nadir_deg))
+
+
+def _calculate_required_off_nadir_deg(
+    distance_km: float,
+    altitude_km: float,
+    half_swath_km: float,
+) -> float | None:
+    if distance_km <= half_swath_km:
+        return 0.0
+
+    if altitude_km <= 0:
+        return None
+
+    required_side_shift_km = distance_km - half_swath_km
+    required_off_nadir_deg = degrees(atan(required_side_shift_km / altitude_km))
+
+    return round(required_off_nadir_deg, 2)
+
+
 def _calculate_metrics(distance_km: float, altitude_km: float, half_swath_km: float):
     if altitude_km <= 0:
         off_nadir_deg = None
@@ -82,6 +129,8 @@ def _build_detected_observation_window(
     current_elevation_values: list[float],
     current_off_nadir_values: list[float],
     current_scores: list[float],
+    current_required_off_nadir_values: list[float],
+    max_off_nadir_deg: float | None,
 ) -> DetectedObservationWindow:
     duration_sec = int((access_end - access_start).total_seconds())
 
@@ -89,6 +138,12 @@ def _build_detected_observation_window(
         aoi_geojson=aoi_geojson,
         access_start=access_start,
         access_end=access_end,
+    )
+
+    required_off_nadir_deg = (
+        min(current_required_off_nadir_values)
+        if current_required_off_nadir_values
+        else None
     )
 
     return DetectedObservationWindow(
@@ -104,6 +159,11 @@ def _build_detected_observation_window(
         observation_score=max(current_scores) if current_scores else None,
         sun_elevation_deg=solar_illumination.sun_elevation_deg,
         is_daylight=solar_illumination.is_daylight,
+        max_off_nadir_deg=max_off_nadir_deg,
+        required_off_nadir_deg=required_off_nadir_deg,
+        requires_pointing=(
+            required_off_nadir_deg is not None and required_off_nadir_deg > 0
+        ),
     )
 
 
@@ -112,6 +172,7 @@ def detect_observation_windows(
     aoi_geojson: dict[str, Any],
     swath_km: float | None,
     step_seconds: int,
+    max_off_nadir_deg: float | None = None,
 ) -> list[DetectedObservationWindow]:
     if not track_points:
         return []
@@ -126,6 +187,8 @@ def detect_observation_windows(
 
     if step_seconds <= 0:
         raise ValueError("step_seconds must be greater than 0")
+
+    normalized_max_off_nadir_deg = _normalize_max_off_nadir_deg(max_off_nadir_deg)
 
     projected_aoi, transformer = _project_geometry_to_local_meters(aoi_geojson)
 
@@ -142,12 +205,24 @@ def detect_observation_windows(
         projected_point = Point(x, y)
 
         distance_m = projected_point.distance(projected_aoi)
+        distance_km = distance_m / 1000.0
+        altitude_km = float(point.get("altitude_km") or 0)
 
-        if distance_m <= half_swath_m:
-            distance_km = distance_m / 1000.0
-            altitude_km = float(point.get("altitude_km") or 0)
+        max_side_shift_km = _calculate_max_side_shift_km(
+            altitude_km=altitude_km,
+            max_off_nadir_deg=normalized_max_off_nadir_deg,
+        )
 
+        reachable_distance_km = half_swath_km + max_side_shift_km
+
+        if distance_km <= reachable_distance_km:
             max_elevation_deg, off_nadir_deg, score = _calculate_metrics(
+                distance_km=distance_km,
+                altitude_km=altitude_km,
+                half_swath_km=half_swath_km,
+            )
+
+            required_off_nadir_deg = _calculate_required_off_nadir_deg(
                 distance_km=distance_km,
                 altitude_km=altitude_km,
                 half_swath_km=half_swath_km,
@@ -160,6 +235,7 @@ def detect_observation_windows(
                     "max_elevation_deg": max_elevation_deg,
                     "off_nadir_deg": off_nadir_deg,
                     "observation_score": score,
+                    "required_off_nadir_deg": required_off_nadir_deg,
                 }
             )
 
@@ -173,6 +249,7 @@ def detect_observation_windows(
     current_scores: list[float] = []
     current_off_nadir_values: list[float] = []
     current_elevation_values: list[float] = []
+    current_required_off_nadir_values: list[float] = []
 
     def add_metrics(point: dict[str, Any]):
         if point["observation_score"] is not None:
@@ -181,6 +258,8 @@ def detect_observation_windows(
             current_off_nadir_values.append(point["off_nadir_deg"])
         if point["max_elevation_deg"] is not None:
             current_elevation_values.append(point["max_elevation_deg"])
+        if point["required_off_nadir_deg"] is not None:
+            current_required_off_nadir_values.append(point["required_off_nadir_deg"])
 
     add_metrics(visible_points[0])
 
@@ -200,6 +279,8 @@ def detect_observation_windows(
                     current_elevation_values=current_elevation_values,
                     current_off_nadir_values=current_off_nadir_values,
                     current_scores=current_scores,
+                    current_required_off_nadir_values=current_required_off_nadir_values,
+                    max_off_nadir_deg=normalized_max_off_nadir_deg,
                 )
             )
 
@@ -208,6 +289,7 @@ def detect_observation_windows(
             current_scores = []
             current_off_nadir_values = []
             current_elevation_values = []
+            current_required_off_nadir_values = []
             add_metrics(point)
 
     windows.append(
@@ -218,6 +300,8 @@ def detect_observation_windows(
             current_elevation_values=current_elevation_values,
             current_off_nadir_values=current_off_nadir_values,
             current_scores=current_scores,
+            current_required_off_nadir_values=current_required_off_nadir_values,
+            max_off_nadir_deg=normalized_max_off_nadir_deg,
         )
     )
 
@@ -231,33 +315,18 @@ def _to_naive_utc(value: datetime) -> datetime:
     return value.astimezone(timezone.utc).replace(tzinfo=None)
 
 
-def calculate_coverage_percent(
+def _collect_window_local_coordinates(
+    *,
     track_points: list[dict[str, Any]],
-    aoi_geojson: dict[str, Any],
-    swath_km: float | None,
+    transformer: Transformer,
     access_start: datetime,
     access_end: datetime,
-) -> float | None:
-    if not track_points:
-        return None
-
-    if swath_km is None:
-        return None
-
-    swath_km_float = float(swath_km)
-
-    if swath_km_float <= 0:
-        return None
-
-    projected_aoi, transformer = _project_geometry_to_local_meters(aoi_geojson)
-
-    if projected_aoi.area <= 0:
-        return None
-
+) -> tuple[list[tuple[float, float]], list[float]]:
     start_time = _to_naive_utc(access_start)
     end_time = _to_naive_utc(access_end)
 
     local_coordinates: list[tuple[float, float]] = []
+    altitude_values_km: list[float] = []
 
     for point in track_points:
         point_time = _to_naive_utc(_parse_datetime(point["time_utc"]))
@@ -271,15 +340,47 @@ def calculate_coverage_percent(
         x, y = transformer.transform(longitude, latitude)
         local_coordinates.append((x, y))
 
+        altitude_km = point.get("altitude_km")
+
+        if altitude_km is not None:
+            altitude_values_km.append(float(altitude_km))
+
+    return local_coordinates, altitude_values_km
+
+
+def _calculate_corridor_coverage_percent(
+    *,
+    track_points: list[dict[str, Any]],
+    aoi_geojson: dict[str, Any],
+    access_start: datetime,
+    access_end: datetime,
+    half_width_m: float,
+) -> float | None:
+    if not track_points:
+        return None
+
+    if half_width_m <= 0:
+        return None
+
+    projected_aoi, transformer = _project_geometry_to_local_meters(aoi_geojson)
+
+    if projected_aoi.area <= 0:
+        return None
+
+    local_coordinates, _altitude_values_km = _collect_window_local_coordinates(
+        track_points=track_points,
+        transformer=transformer,
+        access_start=access_start,
+        access_end=access_end,
+    )
+
     if len(local_coordinates) < 2:
         return None
 
     line = LineString(local_coordinates)
 
-    half_swath_m = (swath_km_float * 1000.0) / 2.0
-
     corridor = line.buffer(
-        half_swath_m,
+        half_width_m,
         cap_style=2,
         join_style=2,
     )
@@ -297,3 +398,96 @@ def calculate_coverage_percent(
     coverage = max(0.0, min(100.0, coverage))
 
     return round(coverage, 2)
+
+
+def calculate_coverage_percent(
+    track_points: list[dict[str, Any]],
+    aoi_geojson: dict[str, Any],
+    swath_km: float | None,
+    access_start: datetime,
+    access_end: datetime,
+) -> float | None:
+    if swath_km is None:
+        return None
+
+    swath_km_float = float(swath_km)
+
+    if swath_km_float <= 0:
+        return None
+
+    half_swath_m = (swath_km_float * 1000.0) / 2.0
+
+    return _calculate_corridor_coverage_percent(
+        track_points=track_points,
+        aoi_geojson=aoi_geojson,
+        access_start=access_start,
+        access_end=access_end,
+        half_width_m=half_swath_m,
+    )
+
+
+def calculate_reachable_coverage_percent(
+    track_points: list[dict[str, Any]],
+    aoi_geojson: dict[str, Any],
+    swath_km: float | None,
+    max_off_nadir_deg: float | None,
+    access_start: datetime,
+    access_end: datetime,
+) -> float | None:
+    if swath_km is None:
+        return None
+
+    swath_km_float = float(swath_km)
+
+    if swath_km_float <= 0:
+        return None
+
+    normalized_max_off_nadir_deg = _normalize_max_off_nadir_deg(max_off_nadir_deg)
+
+    if normalized_max_off_nadir_deg is None:
+        return calculate_coverage_percent(
+            track_points=track_points,
+            aoi_geojson=aoi_geojson,
+            swath_km=swath_km,
+            access_start=access_start,
+            access_end=access_end,
+        )
+
+    projected_aoi, transformer = _project_geometry_to_local_meters(aoi_geojson)
+
+    if projected_aoi.area <= 0:
+        return None
+
+    _local_coordinates, altitude_values_km = _collect_window_local_coordinates(
+        track_points=track_points,
+        transformer=transformer,
+        access_start=access_start,
+        access_end=access_end,
+    )
+
+    if not altitude_values_km:
+        return calculate_coverage_percent(
+            track_points=track_points,
+            aoi_geojson=aoi_geojson,
+            swath_km=swath_km,
+            access_start=access_start,
+            access_end=access_end,
+        )
+
+    average_altitude_km = sum(altitude_values_km) / len(altitude_values_km)
+
+    max_side_shift_km = _calculate_max_side_shift_km(
+        altitude_km=average_altitude_km,
+        max_off_nadir_deg=normalized_max_off_nadir_deg,
+    )
+
+    half_swath_m = (swath_km_float * 1000.0) / 2.0
+    reachable_half_width_m = half_swath_m + max_side_shift_km * 1000.0
+
+    return _calculate_corridor_coverage_percent(
+        track_points=track_points,
+        aoi_geojson=aoi_geojson,
+        access_start=access_start,
+        access_end=access_end,
+        half_width_m=reachable_half_width_m,
+    )
