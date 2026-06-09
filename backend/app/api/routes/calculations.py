@@ -35,6 +35,7 @@ from app.services.visibility_service import (
     # calculate_coverage_percent,
     detect_observation_windows,
 )
+from app.services.solar_service import is_daylight_required_for_sensor
 
 router = APIRouter(prefix="/api/calculations", tags=["calculations"])
 
@@ -252,7 +253,12 @@ def create_calculation(payload: CalculationCreate, db: Session = Depends(get_db)
                 step_seconds=payload.step_seconds,
             )
 
+            daylight_required = is_daylight_required_for_sensor(sensor.sensor_type)
+
+
             for detected_window in detected_windows:
+                if daylight_required and not detected_window.is_daylight:
+                    continue
                 if detected_window.duration_sec < MIN_WINDOW_DURATION_SEC:
                     continue
 
@@ -292,6 +298,9 @@ def create_calculation(payload: CalculationCreate, db: Session = Depends(get_db)
                         off_nadir_deg=detected_window.off_nadir_deg,
                         observation_score=detected_window.observation_score,
                         coverage_percent=coverage_percent,
+                        sun_elevation_deg=detected_window.sun_elevation_deg,
+                        is_daylight=detected_window.is_daylight,
+                        daylight_required=daylight_required,
                     )
                 )
 

@@ -33,6 +33,9 @@ export type ObservationWindow = {
   off_nadir_deg: number | null
   observation_score: number | null
   coverage_percent: number | null
+  sun_elevation_deg: number | null
+  is_daylight: boolean | null
+  daylight_required: boolean
 }
 
 export type CalculationResultResponse = {

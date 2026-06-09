@@ -6,6 +6,7 @@ export type ObservationTask =
   | 'vegetation'
   | 'water'
   | 'fire'
+  | 'burned_area'
   | 'snow'
   | 'urban'
 
@@ -54,8 +55,9 @@ export const OBSERVATION_TASK_LABELS: Record<ObservationTask, string> = {
   vegetation: 'Растительность',
   water: 'Водные объекты',
   fire: 'Пожары / тепловые аномалии',
+  burned_area: 'Последствия пожара / выгоревшие территории',
   snow: 'Снег / лёд',
-  urban: 'Городская застройка',
+  urban: 'Детальная съёмка / городская территория',
 }
 
 export const SPECTRAL_BAND_GROUP_LABELS: Record<SpectralBandGroup, string> = {
@@ -134,6 +136,32 @@ export function getMatchingBandLines(
   return getFilterBandSelection(filters, sensor).bands.map(formatBandWithoutResolution)
 }
 
+export function getBestSensorResolutionM(sensor: Sensor | undefined) {
+  if (!sensor) {
+    return null
+  }
+
+  const detailedBands = getDetailedBands(sensor)
+
+  const bandResolutions = detailedBands
+    .map((band) => band.spatial_resolution_m)
+    .filter((value): value is number => value !== null && value !== undefined)
+
+  if (bandResolutions.length > 0) {
+    return Math.min(...bandResolutions)
+  }
+
+  const modeResolutions = sensor.modes
+    ?.map((mode) => mode.spatial_resolution_m)
+    .filter((value): value is number => value !== null && value !== undefined)
+
+  if (modeResolutions && modeResolutions.length > 0) {
+    return Math.min(...modeResolutions)
+  }
+
+  return null
+}
+
 function getFilterBandSelection(
   filters: ObservationFilters,
   sensor: Sensor | undefined,
@@ -179,8 +207,7 @@ function getFilterBandSelection(
 
   return {
     isMatch: uniqueBands.length > 0,
-    effectiveResolutionM:
-      resolutions.length > 0 ? Math.max(...resolutions) : null,
+    effectiveResolutionM: resolutions.length > 0 ? Math.max(...resolutions) : null,
     bands: uniqueBands,
   }
 }
@@ -237,7 +264,6 @@ function getTaskBands(
   if (task === 'fire') {
     const mwirFire = findBestBand(bands, isMwirFireBand, scoreMwirFireBand)
     const tirSurface = findBestBand(bands, isTirSurfaceBand, scoreTirSurfaceBand)
-    const swir = findBestBand(bands, isSwirBand)
 
     if (mwirFire && tirSurface) {
       return buildRequiredBandsResult([mwirFire, tirSurface])
@@ -247,12 +273,15 @@ function getTaskBands(
       return buildRequiredBandsResult([mwirFire])
     }
 
-    if (swir) {
-      return buildRequiredBandsResult([swir])
-    }
-
     return noMatch()
   }
+
+  if (task === 'burned_area') {
+    return buildRequiredBandsResult([
+        findBestBand(bands, isNirBand),
+        findBestBand(bands, isSwirBand),
+    ])
+    }
 
   if (task === 'snow') {
     return buildRequiredBandsResult([
@@ -263,48 +292,17 @@ function getTaskBands(
 
   if (task === 'urban') {
     const pan = findBestBand(bands, isPanchromaticBand)
-    const nir = findBestBand(bands, isNirBand)
-    const swir = findBestBand(bands, isSwirBand)
     const red = findBestBand(bands, isRedBand)
+    const nir = findBestBand(bands, isNirBand)
 
     if (pan) {
       return buildRequiredBandsResult([pan])
-    }
-
-    if (nir && swir) {
-      return buildRequiredBandsResult([nir, swir])
     }
 
     return buildRequiredBandsResult([red, nir])
   }
 
   return noMatch()
-}
-
-function getBestSensorResolutionM(sensor: Sensor | undefined) {
-  if (!sensor) {
-    return null
-  }
-
-  const detailedBands = getDetailedBands(sensor)
-
-  const bandResolutions = detailedBands
-    .map((band) => band.spatial_resolution_m)
-    .filter((value): value is number => value !== null && value !== undefined)
-
-  if (bandResolutions.length > 0) {
-    return Math.min(...bandResolutions)
-  }
-
-  const modeResolutions = sensor.modes
-    ?.map((mode) => mode.spatial_resolution_m)
-    .filter((value): value is number => value !== null && value !== undefined)
-
-  if (modeResolutions && modeResolutions.length > 0) {
-    return Math.min(...modeResolutions)
-  }
-
-  return null
 }
 
 function buildRequiredBandsResult(items: Array<Band | null>): MatchedTaskBands {
@@ -320,8 +318,7 @@ function buildRequiredBandsResult(items: Array<Band | null>): MatchedTaskBands {
 
   return {
     isMatch: bands.length > 0,
-    effectiveResolutionM:
-      resolutions.length > 0 ? Math.max(...resolutions) : null,
+    effectiveResolutionM: resolutions.length > 0 ? Math.max(...resolutions) : null,
     bands,
   }
 }
@@ -460,83 +457,236 @@ function includesBandText(band: Band, value: string) {
   return bandText(band).includes(value)
 }
 
-function intersectsRange(band: Band, targetMin: number, targetMax: number) {
+function getBandCenterNm(band: Band) {
   const min = band.wavelength_min_nm
   const max = band.wavelength_max_nm
 
   if (min === null || min === undefined || max === null || max === undefined) {
-    return false
+    return null
   }
 
-  return min <= targetMax && max >= targetMin
+  return (min + max) / 2
 }
 
-function isBlueBand(band: Band) {
-  return includesBandText(band, 'blue') || intersectsRange(band, 430, 520)
-}
-
-function isGreenBand(band: Band) {
-  return includesBandText(band, 'green') || intersectsRange(band, 500, 600)
-}
-
-function isRedBand(band: Band) {
-  return includesBandText(band, 'red') || intersectsRange(band, 620, 700)
-}
-
-function isNirBand(band: Band) {
-  return includesBandText(band, 'nir') || intersectsRange(band, 700, 1000)
-}
-
-function isSwirBand(band: Band) {
-  return includesBandText(band, 'swir') || intersectsRange(band, 1000, 2500)
-}
-
-function isMwirBand(band: Band) {
-  return includesBandText(band, 'mwir') || intersectsRange(band, 3500, 4100)
-}
-
-function isMwirFireBand(band: Band) {
-  return (
-    includesBandText(band, 'fire') ||
-    includesBandText(band, 'mwir') ||
-    intersectsRange(band, 3500, 4100)
-  )
-}
-
-function scoreMwirFireBand(band: Band) {
-  if (includesBandText(band, 'fire')) return 0
-  if (intersectsRange(band, 3900, 4000)) return 1
-  if (includesBandText(band, 'mwir')) return 2
-  return 3
-}
-
-function isTirBand(band: Band) {
-  return (
-    includesBandText(band, 'tir') ||
-    includesBandText(band, 'thermal') ||
-    intersectsRange(band, 8000, 15000)
-  )
-}
-
-function isTirSurfaceBand(band: Band) {
-  return (
-    includesBandText(band, 'surface temperature') ||
-    includesBandText(band, 'tir') ||
-    intersectsRange(band, 8000, 12500)
-  )
-}
-
-function scoreTirSurfaceBand(band: Band) {
-  if (includesBandText(band, 'surface temperature')) return 0
-  if (intersectsRange(band, 10700, 12300)) return 1
-  if (includesBandText(band, 'tir')) return 2
-  return 3
+function bandHasExplicitName(band: Band, value: string) {
+  return `${band.band_name ?? ''} ${band.band_type ?? ''}`
+    .toLowerCase()
+    .includes(value)
 }
 
 function isPanchromaticBand(band: Band) {
   return (
     band.band_type === 'panchromatic' ||
-    includesBandText(band, 'panchromatic') ||
-    includesBandText(band, 'pan')
+    bandHasExplicitName(band, 'panchromatic')
   )
+}
+
+function isBlueBand(band: Band) {
+  if (isPanchromaticBand(band)) {
+    return false
+  }
+
+  const center = getBandCenterNm(band)
+
+  if (bandHasExplicitName(band, 'blue')) {
+    return true
+  }
+
+  if (center !== null) {
+    return center >= 430 && center < 520
+  }
+
+  return false
+}
+
+function isGreenBand(band: Band) {
+  if (isPanchromaticBand(band)) {
+    return false
+  }
+
+  const center = getBandCenterNm(band)
+
+  if (bandHasExplicitName(band, 'green')) {
+    return true
+  }
+
+  if (center !== null) {
+    return center >= 520 && center < 600
+  }
+
+  return false
+}
+
+function isRedBand(band: Band) {
+  if (isPanchromaticBand(band)) {
+    return false
+  }
+
+  const center = getBandCenterNm(band)
+
+  if (bandHasExplicitName(band, 'red')) {
+    return true
+  }
+
+  if (center !== null) {
+    return center >= 620 && center < 700
+  }
+
+  return false
+}
+
+function isNirBand(band: Band) {
+  if (isPanchromaticBand(band)) {
+    return false
+  }
+
+  const center = getBandCenterNm(band)
+
+  if (bandHasExplicitName(band, 'nir')) {
+    return true
+  }
+
+  if (center !== null) {
+    return center >= 700 && center < 1400
+  }
+
+  return false
+}
+
+function isSwirBand(band: Band) {
+  if (isPanchromaticBand(band)) {
+    return false
+  }
+
+  const center = getBandCenterNm(band)
+
+  if (bandHasExplicitName(band, 'swir')) {
+    return true
+  }
+
+  if (center !== null) {
+    return center >= 1400 && center < 3000
+  }
+
+  return false
+}
+
+function isMwirBand(band: Band) {
+  if (isPanchromaticBand(band)) {
+    return false
+  }
+
+  const center = getBandCenterNm(band)
+
+  if (bandHasExplicitName(band, 'mwir')) {
+    return true
+  }
+
+  if (center !== null) {
+    return center >= 3000 && center < 5000
+  }
+
+  return false
+}
+
+function isMwirFireBand(band: Band) {
+  if (isPanchromaticBand(band)) {
+    return false
+  }
+
+  const center = getBandCenterNm(band)
+
+  if (bandHasExplicitName(band, 'fire')) {
+    return true
+  }
+
+  if (bandHasExplicitName(band, 'mwir')) {
+    return true
+  }
+
+  if (center !== null) {
+    return center >= 3500 && center < 4100
+  }
+
+  return false
+}
+
+function scoreMwirFireBand(band: Band) {
+  const center = getBandCenterNm(band)
+
+  if (bandHasExplicitName(band, 'fire')) {
+    return 0
+  }
+
+  if (center !== null && center >= 3900 && center < 4000) {
+    return 1
+  }
+
+  if (bandHasExplicitName(band, 'mwir')) {
+    return 2
+  }
+
+  return 3
+}
+
+function isTirBand(band: Band) {
+  if (isPanchromaticBand(band)) {
+    return false
+  }
+
+  const center = getBandCenterNm(band)
+
+  if (bandHasExplicitName(band, 'tir')) {
+    return true
+  }
+
+  if (bandHasExplicitName(band, 'thermal')) {
+    return true
+  }
+
+  if (center !== null) {
+    return center >= 8000 && center <= 15000
+  }
+
+  return false
+}
+
+function isTirSurfaceBand(band: Band) {
+  if (isPanchromaticBand(band)) {
+    return false
+  }
+
+  const center = getBandCenterNm(band)
+
+  if (bandHasExplicitName(band, 'surface temperature')) {
+    return true
+  }
+
+  if (center !== null) {
+    return center >= 10000 && center <= 12500
+  }
+
+  return false
+}
+
+function scoreTirSurfaceBand(band: Band) {
+  const center = getBandCenterNm(band)
+
+  if (bandHasExplicitName(band, 'surface temperature')) {
+    return 0
+  }
+
+  if (center !== null && center >= 10700 && center <= 12300) {
+    return 1
+  }
+
+  if (bandHasExplicitName(band, 'tir')) {
+    return 2
+  }
+
+  if (bandHasExplicitName(band, 'thermal')) {
+    return 3
+  }
+
+  return 4
 }

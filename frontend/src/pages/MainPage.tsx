@@ -17,6 +17,10 @@ import { useCalculationContext } from '../context/CalculationContext'
 import type { GeoJsonPolygon } from '../api/aois'
 import type { WindowMapLayerResponse } from '../types/calculation'
 import type { Satellite, Sensor } from '../types/satellite'
+import {
+  DEFAULT_OBSERVATION_FILTERS,
+  type ObservationFilters,
+} from '../utils/observationFilters'
 
 function buildGeoJsonPolygon(points: AoiPoint[]): GeoJsonPolygon {
   const coordinates = points.map((point) => [point.lng, point.lat])
@@ -79,6 +83,9 @@ export default function MainPage() {
 
   const [satellites, setSatellites] = useState<Satellite[]>([])
   const [sensorCatalog, setSensorCatalog] = useState<Record<number, Sensor[]>>({})
+  const [observationFilters, setObservationFilters] = useState<ObservationFilters>(
+    DEFAULT_OBSERVATION_FILTERS,
+  )
 
   const [message, setMessage] = useState<string>('')
   const [isLoadingSatellites, setIsLoadingSatellites] = useState(false)
@@ -228,6 +235,7 @@ export default function MainPage() {
     setMessage('')
     setIsResultsCollapsed(false)
     setSidebarResetKey((value) => value + 1)
+    setObservationFilters(DEFAULT_OBSERVATION_FILTERS)
 
     clearCalculationResult()
     clearMapSessionState()
@@ -309,6 +317,8 @@ export default function MainPage() {
           onUpdateTle={handleUpdateTle}
           onClearAoi={handleClearAoi}
           onNewCalculation={handleNewCalculation}
+          observationFilters={observationFilters}
+          onObservationFiltersChange={setObservationFilters}
         />
       }
       map={
@@ -341,6 +351,9 @@ export default function MainPage() {
           sensorCatalog={sensorCatalog}
           onToggleWindowLayer={handleToggleWindowLayer}
           onToggleCollapse={() => setIsResultsCollapsed((value) => !value)}
+          observationFilters={observationFilters}
+          onObservationFiltersChange={setObservationFilters}
+          showObservationFilters={false}
         />
       }
     />

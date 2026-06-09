@@ -38,6 +38,9 @@ type Props = {
   onToggleWindowLayer?: (windowId: number) => void
   satellites: Satellite[]
   sensorCatalog: Record<number, Sensor[]>
+  observationFilters?: ObservationFilters
+  onObservationFiltersChange?: Dispatch<SetStateAction<ObservationFilters>>
+  showObservationFilters?: boolean
 
 }
 
@@ -137,13 +140,19 @@ export default function ResultsPanel({
   onToggleCollapse,
   satellites = [],
   sensorCatalog = {},
+  observationFilters,
+  onObservationFiltersChange,
+  showObservationFilters = true,
 }: Props) {
   const [activeTab, setActiveTab] = useState<ResultTab>('windows')
   const [satelliteFilter, setSatelliteFilter] = useState('all')
   const [searchQuery, setSearchQuery] = useState('')
-  const [filters, setFilters] = useState<ObservationFilters>(
+  const [localFilters, setLocalFilters] = useState<ObservationFilters>(
     DEFAULT_OBSERVATION_FILTERS,
   )
+
+const filters = observationFilters ?? localFilters
+const setFilters = onObservationFiltersChange ?? setLocalFilters
 
   const allWindows = result?.windows ?? []
 
@@ -430,12 +439,14 @@ export default function ResultsPanel({
 
               {activeTab === 'windows' && (
                 <>
-                  <ObservationFiltersPanel
-                    filters={filters}
-                    allWindowsCount={allWindows.length}
-                    visibleWindowsCount={filteredWindows.length}
-                    onChange={setFilters}
-                  />
+                  {showObservationFilters && (
+                    <ObservationFiltersPanel
+                      filters={filters}
+                      allWindowsCount={allWindows.length}
+                      visibleWindowsCount={filteredWindows.length}
+                      onChange={setFilters}
+                    />
+                  )}
 
                   <ObservationWindowsTable
                     windows={filteredWindows}

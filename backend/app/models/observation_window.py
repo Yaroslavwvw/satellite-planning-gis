@@ -1,7 +1,7 @@
 from datetime import datetime
 
 from sqlalchemy import BigInteger, DateTime, ForeignKey, Integer, Numeric
-from sqlalchemy import Float, Integer
+from sqlalchemy import Float, Integer, Boolean
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
@@ -42,5 +42,8 @@ class ObservationWindow(Base):
     off_nadir_deg: Mapped[float | None] = mapped_column(Numeric(6, 3), nullable=True)
     observation_score: Mapped[float | None] = mapped_column(Numeric(8, 3), nullable=True)
     coverage_percent: Mapped[float | None] = mapped_column(Float, nullable=True)
+    sun_elevation_deg: Mapped[float | None] = mapped_column(Float, nullable=True)
+    is_daylight: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    daylight_required: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
     calculation_run = relationship("CalculationRun", back_populates="observation_windows")

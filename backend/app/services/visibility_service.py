@@ -4,9 +4,10 @@ from math import atan, degrees
 from typing import Any
 
 from pyproj import Transformer
-from shapely.geometry import Point, shape
-from shapely.geometry import LineString
+from shapely.geometry import LineString, Point, shape
 from shapely.ops import transform
+
+from app.services.solar_service import calculate_window_solar_illumination
 
 
 @dataclass
@@ -17,6 +18,8 @@ class DetectedObservationWindow:
     max_elevation_deg: float | None
     off_nadir_deg: float | None
     observation_score: float | None
+    sun_elevation_deg: float | None = None
+    is_daylight: bool | None = None
 
 
 def _parse_datetime(value: str) -> datetime:
@@ -68,6 +71,39 @@ def _calculate_metrics(distance_km: float, altitude_km: float, half_swath_km: fl
         round(max_elevation_deg, 2) if max_elevation_deg is not None else None,
         round(off_nadir_deg, 2) if off_nadir_deg is not None else None,
         round(score, 3) if score is not None else None,
+    )
+
+
+def _build_detected_observation_window(
+    *,
+    aoi_geojson: dict[str, Any],
+    access_start: datetime,
+    access_end: datetime,
+    current_elevation_values: list[float],
+    current_off_nadir_values: list[float],
+    current_scores: list[float],
+) -> DetectedObservationWindow:
+    duration_sec = int((access_end - access_start).total_seconds())
+
+    solar_illumination = calculate_window_solar_illumination(
+        aoi_geojson=aoi_geojson,
+        access_start=access_start,
+        access_end=access_end,
+    )
+
+    return DetectedObservationWindow(
+        access_start=access_start,
+        access_end=access_end,
+        duration_sec=duration_sec,
+        max_elevation_deg=max(current_elevation_values)
+        if current_elevation_values
+        else None,
+        off_nadir_deg=min(current_off_nadir_values)
+        if current_off_nadir_values
+        else None,
+        observation_score=max(current_scores) if current_scores else None,
+        sun_elevation_deg=solar_illumination.sun_elevation_deg,
+        is_daylight=solar_illumination.is_daylight,
     )
 
 
@@ -156,20 +192,14 @@ def detect_observation_windows(
             current_end = point_time + timedelta(seconds=step_seconds)
             add_metrics(point)
         else:
-            duration_sec = int((current_end - current_start).total_seconds())
-
             windows.append(
-                DetectedObservationWindow(
+                _build_detected_observation_window(
+                    aoi_geojson=aoi_geojson,
                     access_start=current_start,
                     access_end=current_end,
-                    duration_sec=duration_sec,
-                    max_elevation_deg=max(current_elevation_values)
-                    if current_elevation_values
-                    else None,
-                    off_nadir_deg=min(current_off_nadir_values)
-                    if current_off_nadir_values
-                    else None,
-                    observation_score=max(current_scores) if current_scores else None,
+                    current_elevation_values=current_elevation_values,
+                    current_off_nadir_values=current_off_nadir_values,
+                    current_scores=current_scores,
                 )
             )
 
@@ -180,23 +210,16 @@ def detect_observation_windows(
             current_elevation_values = []
             add_metrics(point)
 
-    duration_sec = int((current_end - current_start).total_seconds())
-
     windows.append(
-        DetectedObservationWindow(
+        _build_detected_observation_window(
+            aoi_geojson=aoi_geojson,
             access_start=current_start,
             access_end=current_end,
-            duration_sec=duration_sec,
-            max_elevation_deg=max(current_elevation_values)
-            if current_elevation_values
-            else None,
-            off_nadir_deg=min(current_off_nadir_values)
-            if current_off_nadir_values
-            else None,
-            observation_score=max(current_scores) if current_scores else None,
+            current_elevation_values=current_elevation_values,
+            current_off_nadir_values=current_off_nadir_values,
+            current_scores=current_scores,
         )
     )
-
 
     return windows
 

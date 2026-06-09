@@ -69,6 +69,9 @@ class ObservationWindowRead(BaseModel):
     off_nadir_deg: float | None = None
     observation_score: float | None = None
     coverage_percent: float | None = None
+    sun_elevation_deg: float | None = None
+    is_daylight: bool | None = None
+    daylight_required: bool = False
 
 class TrackLayerRead(BaseModel):
     satellite_id: int

@@ -1,7 +1,24 @@
-import { useEffect, useMemo, useState } from 'react'
+import {
+  useEffect,
+  useMemo,
+  useState,
+  type Dispatch,
+  type SetStateAction,
+} from 'react'
 import type { AoiPoint } from '../map/MapPanel'
 import type { CalculationRun } from '../../types/calculation'
 import type { Satellite } from '../../types/satellite'
+import {
+  DEFAULT_OBSERVATION_FILTERS,
+  OBSERVATION_TASK_LABELS,
+  SPECTRAL_BAND_GROUP_LABELS,
+  type DataAccessFilter,
+  type MaxResolutionFilter,
+  type ObservationFilters,
+  type ObservationTask,
+  type SensorTypeFilter,
+  type SpectralBandGroup,
+} from '../../utils/observationFilters'
 
 export type CalculationFormValues = {
   aoiName: string
@@ -23,6 +40,8 @@ type Props = {
   currentCalculationRun: CalculationRun | null
   currentCalculationSatelliteIds: number[]
   aoiPoints: AoiPoint[]
+  observationFilters: ObservationFilters
+  onObservationFiltersChange: Dispatch<SetStateAction<ObservationFilters>>
   onCalculate: (values: CalculationFormValues) => void
   onUpdateTle: () => void
   onClearAoi: () => void
@@ -54,6 +73,8 @@ export default function CalculationSidebar({
   currentCalculationRun,
   currentCalculationSatelliteIds,
   aoiPoints,
+  observationFilters,
+  onObservationFiltersChange,
   onCalculate,
   onUpdateTle,
   onClearAoi,
@@ -75,7 +96,8 @@ export default function CalculationSidebar({
     setStepSeconds(60)
     setMode('all_catalog')
     setSatelliteIds([])
-  }, [resetKey])
+    onObservationFiltersChange(DEFAULT_OBSERVATION_FILTERS)
+  }, [resetKey, onObservationFiltersChange])
 
   useEffect(() => {
     if (currentAoiName) {
@@ -107,6 +129,26 @@ export default function CalculationSidebar({
         ? current.filter((id) => id !== satelliteId)
         : [...current, satelliteId],
     )
+  }
+
+  function updateObservationFilters(partial: Partial<ObservationFilters>) {
+    onObservationFiltersChange((current) => ({
+      ...current,
+      ...partial,
+    }))
+  }
+
+  function toggleBandGroup(group: SpectralBandGroup) {
+    onObservationFiltersChange((current) => {
+      const exists = current.manualBandGroups.includes(group)
+
+      return {
+        ...current,
+        manualBandGroups: exists
+          ? current.manualBandGroups.filter((item) => item !== group)
+          : [...current.manualBandGroups, group],
+      }
+    })
   }
 
   function handleSubmit() {
@@ -245,6 +287,118 @@ export default function CalculationSidebar({
           ))}
         </div>
       )}
+
+      <div className="section-title">Параметры наблюдения</div>
+
+      <label htmlFor="observationTask">Задача наблюдения</label>
+      <select
+        id="observationTask"
+        value={observationFilters.task}
+        onChange={(event) =>
+          updateObservationFilters({
+            task: event.target.value as ObservationTask,
+          })
+        }
+      >
+        {Object.entries(OBSERVATION_TASK_LABELS).map(([value, label]) => (
+          <option key={value} value={value}>
+            {label}
+          </option>
+        ))}
+      </select>
+
+      <label htmlFor="minCoveragePercent">Мин. покрытие AOI</label>
+      <select
+        id="minCoveragePercent"
+        value={observationFilters.minCoveragePercent}
+        onChange={(event) =>
+          updateObservationFilters({
+            minCoveragePercent: Number(event.target.value),
+          })
+        }
+      >
+        <option value={0}>любое</option>
+        <option value={10}>от 10%</option>
+        <option value={25}>от 25%</option>
+        <option value={50}>от 50%</option>
+        <option value={75}>от 75%</option>
+      </select>
+
+      <label htmlFor="maxResolutionM">Макс. разрешение анализа</label>
+      <select
+        id="maxResolutionM"
+        value={observationFilters.maxResolutionM}
+        onChange={(event) => {
+          const value = event.target.value
+
+          updateObservationFilters({
+            maxResolutionM:
+              value === 'any' ? 'any' : (Number(value) as MaxResolutionFilter),
+          })
+        }}
+      >
+        <option value="any">любое</option>
+        <option value={10}>до 10 м</option>
+        <option value={30}>до 30 м</option>
+        <option value={100}>до 100 м</option>
+        <option value={1000}>до 1000 м</option>
+      </select>
+
+      <label htmlFor="dataAccess">Тип данных</label>
+      <select
+        id="dataAccess"
+        value={observationFilters.dataAccess}
+        onChange={(event) =>
+          updateObservationFilters({
+            dataAccess: event.target.value as DataAccessFilter,
+          })
+        }
+      >
+        <option value="any">любые</option>
+        <option value="open">только открытые</option>
+      </select>
+
+      <label htmlFor="sensorType">Тип сенсора</label>
+      <select
+        id="sensorType"
+        value={observationFilters.sensorType}
+        onChange={(event) =>
+          updateObservationFilters({
+            sensorType: event.target.value as SensorTypeFilter,
+          })
+        }
+      >
+        <option value="any">любой</option>
+        <option value="optical">optical</option>
+        <option value="thermal">thermal</option>
+        <option value="sar">SAR</option>
+      </select>
+
+      <div className="sidebar-spectral-filter">
+        <div className="sidebar-spectral-filter-title">Спектральные диапазоны</div>
+
+        <div className="sidebar-band-filter-grid">
+          {Object.entries(SPECTRAL_BAND_GROUP_LABELS).map(([value, label]) => {
+            const group = value as SpectralBandGroup
+
+            return (
+              <label key={group} className="sidebar-band-filter-chip">
+                <input
+                  type="checkbox"
+                  checked={observationFilters.manualBandGroups.includes(group)}
+                  onChange={() => toggleBandGroup(group)}
+                />
+                <span>{label}</span>
+              </label>
+            )
+          })}
+        </div>
+      </div>
+
+      <div className="hint">
+        Эти параметры фильтруют найденные окна по задаче, каналам, разрешению и
+        доступности данных.
+      </div>
 
       <div className="section-title">Параметры расчёта</div>
 
