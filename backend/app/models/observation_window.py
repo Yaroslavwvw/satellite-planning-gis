@@ -49,5 +49,12 @@ class ObservationWindow(Base):
     required_off_nadir_deg: Mapped[float | None] = mapped_column(Float, nullable=True)
     requires_pointing: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     reachable_coverage_percent: Mapped[float | None] = mapped_column(Float, nullable=True)
+    sensor_mode_id: Mapped[int | None] = mapped_column(
+        ForeignKey("sensor_modes.sensor_mode_id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    
+
+    swath_km: Mapped[float | None] = mapped_column(Float, nullable=True)
 
     calculation_run = relationship("CalculationRun", back_populates="observation_windows")

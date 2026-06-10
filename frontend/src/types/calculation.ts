@@ -25,6 +25,8 @@ export type ObservationWindow = {
   satellite_name: string
   sensor_id: number
   sensor_name: string
+  sensor_mode_id: number | null
+  sensor_mode_name: string | null
   aoi_id: number
   access_start: string
   access_end: string
@@ -36,6 +38,7 @@ export type ObservationWindow = {
   sun_elevation_deg: number | null
   is_daylight: boolean | null
   daylight_required: boolean
+  swath_km: number | null
   max_off_nadir_deg: number | null
   required_off_nadir_deg: number | null
   requires_pointing: boolean

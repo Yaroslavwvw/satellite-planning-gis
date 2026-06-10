@@ -61,6 +61,8 @@ class ObservationWindowRead(BaseModel):
     satellite_name: str
     sensor_id: int
     sensor_name: str
+    sensor_mode_id: int | None = None
+    sensor_mode_name: str | None = None
     aoi_id: int
     access_start: datetime
     access_end: datetime
@@ -72,6 +74,7 @@ class ObservationWindowRead(BaseModel):
     sun_elevation_deg: float | None = None
     is_daylight: bool | None = None
     daylight_required: bool = False
+    swath_km: float | None = None
     max_off_nadir_deg: float | None = None
     required_off_nadir_deg: float | None = None
     requires_pointing: bool = False
