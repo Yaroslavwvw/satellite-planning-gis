@@ -1,6 +1,7 @@
 from datetime import datetime
 
 from sqlalchemy import BigInteger, DateTime, ForeignKey, Integer, String
+from sqlalchemy import Boolean, Float
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
@@ -26,6 +27,9 @@ class CalculationRun(Base):
         default=datetime.utcnow,
         nullable=False,
     )
+    off_nadir_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    manual_off_nadir_deg: Mapped[float | None] = mapped_column(Float, nullable=True)
+    sar_look_direction: Mapped[str] = mapped_column(String(20), default="both", nullable=False)
 
     aoi = relationship("AOI", back_populates="calculation_runs")
     selected_satellites = relationship(

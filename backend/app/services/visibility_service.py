@@ -23,6 +23,9 @@ class DetectedObservationWindow:
     max_off_nadir_deg: float | None = None
     required_off_nadir_deg: float | None = None
     requires_pointing: bool = False
+    sar_min_look_angle_deg: float | None = None
+    sar_max_look_angle_deg: float | None = None
+    sar_look_direction: str | None = None
 
 
 def _parse_datetime(value: str) -> datetime:
@@ -131,6 +134,9 @@ def _build_detected_observation_window(
     current_scores: list[float],
     current_required_off_nadir_values: list[float],
     max_off_nadir_deg: float | None,
+    sar_min_look_angle_deg: float | None = None,
+    sar_max_look_angle_deg: float | None = None,
+    sar_look_direction: str | None = None,
 ) -> DetectedObservationWindow:
     duration_sec = int((access_end - access_start).total_seconds())
 
@@ -164,6 +170,9 @@ def _build_detected_observation_window(
         requires_pointing=(
             required_off_nadir_deg is not None and required_off_nadir_deg > 0
         ),
+        sar_min_look_angle_deg=sar_min_look_angle_deg,
+        sar_max_look_angle_deg=sar_max_look_angle_deg,
+        sar_look_direction=sar_look_direction,
     )
 
 
@@ -307,6 +316,391 @@ def detect_observation_windows(
 
     return windows
 
+
+
+def _normalize_sar_look_direction(value: str | None) -> str:
+    if value in {"left", "right", "both"}:
+        return value
+
+    return "both"
+
+
+def _calculate_ground_range_km(
+    altitude_km: float,
+    look_angle_deg: float | None,
+) -> float | None:
+    if altitude_km <= 0:
+        return None
+
+    if look_angle_deg is None:
+        return None
+
+    look_angle_float = float(look_angle_deg)
+
+    if look_angle_float <= 0 or look_angle_float >= 90:
+        return None
+
+    return altitude_km * tan(radians(look_angle_float))
+
+
+def _calculate_off_nadir_to_aoi_centroid_deg(
+    projected_point: Point,
+    projected_aoi,
+    altitude_km: float,
+) -> float | None:
+    if altitude_km <= 0:
+        return None
+
+    centroid_distance_km = projected_point.distance(projected_aoi.centroid) / 1000.0
+
+    return round(degrees(atan(centroid_distance_km / altitude_km)), 2)
+
+
+def _get_local_track_direction(
+    local_track_points: list[dict[str, Any]],
+    point_index: int,
+) -> tuple[float, float] | None:
+    if len(local_track_points) < 2:
+        return None
+
+    if point_index == 0:
+        previous_point = local_track_points[point_index]
+        next_point = local_track_points[point_index + 1]
+    elif point_index == len(local_track_points) - 1:
+        previous_point = local_track_points[point_index - 1]
+        next_point = local_track_points[point_index]
+    else:
+        previous_point = local_track_points[point_index - 1]
+        next_point = local_track_points[point_index + 1]
+
+    dx = next_point["x"] - previous_point["x"]
+    dy = next_point["y"] - previous_point["y"]
+
+    if dx == 0 and dy == 0:
+        return None
+
+    return dx, dy
+
+
+def _is_aoi_on_requested_sar_side(
+    *,
+    projected_point: Point,
+    projected_aoi,
+    direction_vector: tuple[float, float] | None,
+    sar_look_direction: str,
+) -> bool:
+    if sar_look_direction == "both":
+        return True
+
+    if direction_vector is None:
+        return True
+
+    dx, dy = direction_vector
+    vector_to_aoi_x = projected_aoi.centroid.x - projected_point.x
+    vector_to_aoi_y = projected_aoi.centroid.y - projected_point.y
+
+    cross_product = dx * vector_to_aoi_y - dy * vector_to_aoi_x
+
+    if sar_look_direction == "left":
+        return cross_product > 0
+
+    if sar_look_direction == "right":
+        return cross_product < 0
+
+    return True
+
+
+def _build_detected_sar_observation_window(
+    *,
+    aoi_geojson: dict[str, Any],
+    access_start: datetime,
+    access_end: datetime,
+    current_elevation_values: list[float],
+    current_off_nadir_values: list[float],
+    current_scores: list[float],
+    current_required_off_nadir_values: list[float],
+    sar_min_look_angle_deg: float,
+    sar_max_look_angle_deg: float,
+    sar_look_direction: str,
+) -> DetectedObservationWindow:
+    window = _build_detected_observation_window(
+        aoi_geojson=aoi_geojson,
+        access_start=access_start,
+        access_end=access_end,
+        current_elevation_values=current_elevation_values,
+        current_off_nadir_values=current_off_nadir_values,
+        current_scores=current_scores,
+        current_required_off_nadir_values=current_required_off_nadir_values,
+        max_off_nadir_deg=None,
+        sar_min_look_angle_deg=sar_min_look_angle_deg,
+        sar_max_look_angle_deg=sar_max_look_angle_deg,
+        sar_look_direction=sar_look_direction,
+    )
+
+    window.requires_pointing = True
+
+    return window
+
+
+def detect_sar_observation_windows(
+    track_points: list[dict[str, Any]],
+    aoi_geojson: dict[str, Any],
+    step_seconds: int,
+    sar_min_look_angle_deg: float | None,
+    sar_max_look_angle_deg: float | None,
+    sar_look_direction: str | None = "both",
+) -> list[DetectedObservationWindow]:
+    if not track_points:
+        return []
+
+    if sar_min_look_angle_deg is None or sar_max_look_angle_deg is None:
+        return []
+
+    sar_min_look_angle_float = float(sar_min_look_angle_deg)
+    sar_max_look_angle_float = float(sar_max_look_angle_deg)
+
+    if sar_min_look_angle_float <= 0:
+        return []
+
+    if sar_max_look_angle_float <= sar_min_look_angle_float:
+        return []
+
+    if sar_max_look_angle_float >= 90:
+        return []
+
+    if step_seconds <= 0:
+        raise ValueError("step_seconds must be greater than 0")
+
+    normalized_sar_look_direction = _normalize_sar_look_direction(sar_look_direction)
+
+    projected_aoi, transformer = _project_geometry_to_local_meters(aoi_geojson)
+
+    local_track_points: list[dict[str, Any]] = []
+
+    for point in track_points:
+        longitude = point["longitude"]
+        latitude = point["latitude"]
+        x, y = transformer.transform(longitude, latitude)
+
+        local_track_points.append(
+            {
+                "source": point,
+                "x": x,
+                "y": y,
+                "point": Point(x, y),
+            }
+        )
+
+    visible_points: list[dict[str, Any]] = []
+
+    for point_index, local_point in enumerate(local_track_points):
+        source_point = local_point["source"]
+        projected_point = local_point["point"]
+        altitude_km = float(source_point.get("altitude_km") or 0)
+
+        near_range_km = _calculate_ground_range_km(
+            altitude_km=altitude_km,
+            look_angle_deg=sar_min_look_angle_float,
+        )
+        far_range_km = _calculate_ground_range_km(
+            altitude_km=altitude_km,
+            look_angle_deg=sar_max_look_angle_float,
+        )
+
+        if near_range_km is None or far_range_km is None:
+            continue
+
+        near_range_m = near_range_km * 1000.0
+        far_range_m = far_range_km * 1000.0
+
+        if far_range_m <= near_range_m:
+            continue
+
+        direction_vector = _get_local_track_direction(
+            local_track_points=local_track_points,
+            point_index=point_index,
+        )
+
+        if not _is_aoi_on_requested_sar_side(
+            projected_point=projected_point,
+            projected_aoi=projected_aoi,
+            direction_vector=direction_vector,
+            sar_look_direction=normalized_sar_look_direction,
+        ):
+            continue
+
+        sar_reachable_zone = projected_point.buffer(far_range_m).difference(
+            projected_point.buffer(near_range_m)
+        )
+
+        if sar_reachable_zone.is_empty:
+            continue
+
+        if not sar_reachable_zone.intersects(projected_aoi):
+            continue
+
+        off_nadir_deg = _calculate_off_nadir_to_aoi_centroid_deg(
+            projected_point=projected_point,
+            projected_aoi=projected_aoi,
+            altitude_km=altitude_km,
+        )
+
+        if off_nadir_deg is None:
+            continue
+
+        max_elevation_deg = round(max(0.0, 90.0 - off_nadir_deg), 2)
+
+        visible_points.append(
+            {
+                "time": _parse_datetime(source_point["time_utc"]),
+                "max_elevation_deg": max_elevation_deg,
+                "off_nadir_deg": off_nadir_deg,
+                "observation_score": 1.0,
+                "required_off_nadir_deg": off_nadir_deg,
+            }
+        )
+
+    if not visible_points:
+        return []
+
+    windows: list[DetectedObservationWindow] = []
+
+    current_start = visible_points[0]["time"]
+    current_end = visible_points[0]["time"] + timedelta(seconds=step_seconds)
+    current_scores: list[float] = []
+    current_off_nadir_values: list[float] = []
+    current_elevation_values: list[float] = []
+    current_required_off_nadir_values: list[float] = []
+
+    def add_metrics(point: dict[str, Any]):
+        if point["observation_score"] is not None:
+            current_scores.append(point["observation_score"])
+        if point["off_nadir_deg"] is not None:
+            current_off_nadir_values.append(point["off_nadir_deg"])
+        if point["max_elevation_deg"] is not None:
+            current_elevation_values.append(point["max_elevation_deg"])
+        if point["required_off_nadir_deg"] is not None:
+            current_required_off_nadir_values.append(point["required_off_nadir_deg"])
+
+    add_metrics(visible_points[0])
+
+    for point in visible_points[1:]:
+        point_time = point["time"]
+        gap_seconds = (point_time - current_end).total_seconds()
+
+        if gap_seconds <= step_seconds * 1.5:
+            current_end = point_time + timedelta(seconds=step_seconds)
+            add_metrics(point)
+        else:
+            windows.append(
+                _build_detected_sar_observation_window(
+                    aoi_geojson=aoi_geojson,
+                    access_start=current_start,
+                    access_end=current_end,
+                    current_elevation_values=current_elevation_values,
+                    current_off_nadir_values=current_off_nadir_values,
+                    current_scores=current_scores,
+                    current_required_off_nadir_values=current_required_off_nadir_values,
+                    sar_min_look_angle_deg=sar_min_look_angle_float,
+                    sar_max_look_angle_deg=sar_max_look_angle_float,
+                    sar_look_direction=normalized_sar_look_direction,
+                )
+            )
+
+            current_start = point_time
+            current_end = point_time + timedelta(seconds=step_seconds)
+            current_scores = []
+            current_off_nadir_values = []
+            current_elevation_values = []
+            current_required_off_nadir_values = []
+            add_metrics(point)
+
+    windows.append(
+        _build_detected_sar_observation_window(
+            aoi_geojson=aoi_geojson,
+            access_start=current_start,
+            access_end=current_end,
+            current_elevation_values=current_elevation_values,
+            current_off_nadir_values=current_off_nadir_values,
+            current_scores=current_scores,
+            current_required_off_nadir_values=current_required_off_nadir_values,
+            sar_min_look_angle_deg=sar_min_look_angle_float,
+            sar_max_look_angle_deg=sar_max_look_angle_float,
+            sar_look_direction=normalized_sar_look_direction,
+        )
+    )
+
+    return windows
+
+
+def calculate_sar_reachable_coverage_percent(
+    track_points: list[dict[str, Any]],
+    aoi_geojson: dict[str, Any],
+    sar_min_look_angle_deg: float | None,
+    sar_max_look_angle_deg: float | None,
+    access_start: datetime,
+    access_end: datetime,
+) -> float | None:
+    if sar_min_look_angle_deg is None or sar_max_look_angle_deg is None:
+        return None
+
+    projected_aoi, transformer = _project_geometry_to_local_meters(aoi_geojson)
+
+    if projected_aoi.area <= 0:
+        return None
+
+    local_coordinates, altitude_values_km = _collect_window_local_coordinates(
+        track_points=track_points,
+        transformer=transformer,
+        access_start=access_start,
+        access_end=access_end,
+    )
+
+    if len(local_coordinates) < 2 or not altitude_values_km:
+        return None
+
+    average_altitude_km = sum(altitude_values_km) / len(altitude_values_km)
+
+    near_range_km = _calculate_ground_range_km(
+        altitude_km=average_altitude_km,
+        look_angle_deg=sar_min_look_angle_deg,
+    )
+    far_range_km = _calculate_ground_range_km(
+        altitude_km=average_altitude_km,
+        look_angle_deg=sar_max_look_angle_deg,
+    )
+
+    if near_range_km is None or far_range_km is None:
+        return None
+
+    if far_range_km <= near_range_km:
+        return None
+
+    line = LineString(local_coordinates)
+    sar_zone = line.buffer(
+        far_range_km * 1000.0,
+        cap_style=2,
+        join_style=2,
+    ).difference(
+        line.buffer(
+            near_range_km * 1000.0,
+            cap_style=2,
+            join_style=2,
+        )
+    )
+
+    if sar_zone.is_empty:
+        return None
+
+    intersection = sar_zone.intersection(projected_aoi)
+
+    if intersection.is_empty:
+        return 0.0
+
+    coverage = (intersection.area / projected_aoi.area) * 100.0
+    coverage = max(0.0, min(100.0, coverage))
+
+    return round(coverage, 2)
 
 def _to_naive_utc(value: datetime) -> datetime:
     if value.tzinfo is None:

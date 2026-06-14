@@ -10,6 +10,8 @@ export type Satellite = {
   orbital_period_min: number | null
   avg_altitude_km: number | null
   description: string | null
+  data_access_type: string | null
+  data_access_note: string | null
 }
 
 export type SensorBand = {
@@ -36,4 +38,20 @@ export type Sensor = {
   retarget_time_sec: number | null
   notes: string | null
   bands: SensorBand[]
+  data_access_type: string | null
+  data_access_note: string | null
+  max_off_nadir_deg: number | null
+  modes: SensorMode[]
+}
+
+export type SensorMode = {
+  sensor_mode_id: number
+  sensor_id: number
+  mode_name: string
+  mode_type: string | null
+  swath_km: number | null
+  spatial_resolution_m: number | null
+  max_off_nadir_deg: number | null
+  is_default: boolean
+  description: string | null
 }

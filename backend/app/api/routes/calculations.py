@@ -28,6 +28,7 @@ from app.schemas.calculation import (
 from app.services.map_layers_service import (
     build_footprint_corridor_geojson,
     build_reachable_footprint_corridor_geojson,
+    build_sar_footprint_corridor_geojson,
     build_track_line_geojson,
     calculate_footprint_coverage_details,
     select_track_segment_near_aoi,
@@ -36,7 +37,12 @@ from app.services.orbit_service import generate_satellite_track
 from app.services.solar_service import is_daylight_required_for_sensor
 from app.services.visibility_service import (
     calculate_reachable_coverage_percent,
+    calculate_sar_reachable_coverage_percent,
     detect_observation_windows,
+    detect_sar_observation_windows,
+)
+from app.services.orbital_parameters_service import (
+    calculate_orbital_parameters_from_tle,
 )
 
 router = APIRouter(prefix="/api/calculations", tags=["calculations"])
@@ -63,6 +69,46 @@ def get_sensor_modes_for_calculation(sensor: Sensor) -> list[SensorMode | None]:
 
     return [None]
 
+def is_sar_sensor(sensor: Sensor) -> bool:
+    sensor_type = (sensor.sensor_type or "").lower()
+    sensor_name = (sensor.name or "").lower()
+
+    return (
+        "sar" in sensor_type
+        or "radar" in sensor_type
+        or "радиолока" in sensor_type
+        or "sar" in sensor_name
+    )
+
+
+def is_wide_scanner_sensor(sensor: Sensor) -> bool:
+    sensor_name = (sensor.name or "").lower()
+
+    return (
+        "modis" in sensor_name
+        or "msu-mr" in sensor_name
+        or "мсу-мр" in sensor_name
+    )
+
+
+def get_effective_manual_off_nadir_deg(
+    payload: CalculationCreate,
+    sensor: Sensor,
+) -> float | None:
+    if not payload.off_nadir_enabled:
+        return None
+
+    if payload.manual_off_nadir_deg is None:
+        return None
+
+    if is_sar_sensor(sensor):
+        return None
+
+    if is_wide_scanner_sensor(sensor):
+        return None
+
+    return payload.manual_off_nadir_deg
+
 
 def get_mode_swath_km(sensor: Sensor, mode: SensorMode | None) -> float | None:
     if mode is not None and mode.swath_km is not None:
@@ -80,6 +126,33 @@ def get_mode_max_off_nadir_deg(
 
     return sensor.max_off_nadir_deg
 
+
+
+def get_mode_sar_min_look_angle_deg(mode: SensorMode | None) -> float | None:
+    if mode is None:
+        return None
+
+    return mode.sar_min_look_angle_deg
+
+
+def get_mode_sar_max_look_angle_deg(mode: SensorMode | None) -> float | None:
+    if mode is None:
+        return None
+
+    return mode.sar_max_look_angle_deg
+
+
+def get_effective_sar_look_direction(
+    payload: CalculationCreate,
+    mode: SensorMode | None,
+) -> str:
+    if payload.sar_look_direction in {"left", "right", "both"}:
+        return payload.sar_look_direction
+
+    if mode is not None and mode.sar_look_direction in {"left", "right", "both"}:
+        return mode.sar_look_direction
+
+    return "both"
 
 def get_mode_id(mode: SensorMode | None) -> int | None:
     if mode is None:
@@ -236,6 +309,60 @@ def build_reachable_window_footprint_layer(
     )
 
 
+
+def build_sar_window_footprint_layer(
+    satellite: Satellite,
+    sensor: Sensor,
+    tle_record: TLERecord,
+    aoi_geometry: dict,
+    access_start: datetime,
+    access_end: datetime,
+    sar_min_look_angle_deg: float | None,
+    sar_max_look_angle_deg: float | None,
+    sar_look_direction: str | None,
+):
+    segment_start = access_start - timedelta(minutes=WINDOW_LAYER_PADDING_MINUTES)
+    segment_end = access_end + timedelta(minutes=WINDOW_LAYER_PADDING_MINUTES)
+
+    track_points = generate_satellite_track(
+        satellite_name=satellite.name,
+        line1=tle_record.line1,
+        line2=tle_record.line2,
+        start_time=segment_start,
+        end_time=segment_end,
+        step_seconds=WINDOW_LAYER_STEP_SECONDS,
+    )
+
+    local_track_points = select_track_segment_near_aoi(
+        track_points=track_points,
+        aoi_geojson=aoi_geometry,
+        points_before=3,
+        points_after=3,
+    )
+
+    if len(local_track_points) < 2:
+        return None
+
+    sar_geometry = build_sar_footprint_corridor_geojson(
+        track_points=local_track_points,
+        aoi_geojson=aoi_geometry,
+        sar_min_look_angle_deg=sar_min_look_angle_deg,
+        sar_max_look_angle_deg=sar_max_look_angle_deg,
+        sar_look_direction=sar_look_direction,
+    )
+
+    if sar_geometry is None:
+        return None
+
+    return FootprintLayerRead(
+        satellite_id=satellite.satellite_id,
+        satellite_name=satellite.name,
+        sensor_id=sensor.sensor_id,
+        sensor_name=f"{sensor.name} — SAR-зона обзора",
+        swath_km=None,
+        geometry=sar_geometry,
+    )
+
 @router.post("", response_model=CalculationPlaceholderResponse)
 def create_calculation(payload: CalculationCreate, db: Session = Depends(get_db)):
     aoi = db.get(AOI, payload.aoi_id)
@@ -273,10 +400,14 @@ def create_calculation(payload: CalculationCreate, db: Session = Depends(get_db)
         aoi_id=payload.aoi_id,
         period_start=payload.period_start,
         period_end=payload.period_end,
+        off_nadir_enabled=payload.off_nadir_enabled,
+        manual_off_nadir_deg=payload.manual_off_nadir_deg,
+        sar_look_direction=payload.sar_look_direction,
         step_seconds=payload.step_seconds,
         mode=payload.mode,
         status="completed",
     )
+
 
     db.add(run)
     db.flush()
@@ -317,6 +448,13 @@ def create_calculation(payload: CalculationCreate, db: Session = Depends(get_db)
             missing_tle.append(satellite.name)
             continue
 
+        orbital_parameters = calculate_orbital_parameters_from_tle(current_tle.line2)
+
+        satellite.inclination_deg = orbital_parameters.inclination_deg
+        satellite.orbital_period_min = orbital_parameters.orbital_period_min
+        satellite.avg_altitude_km = orbital_parameters.mean_altitude_km
+        satellite.mean_altitude_km = orbital_parameters.mean_altitude_km
+
         db.add(
             CalculationRunSatellite(
                 calculation_run_id=run.calculation_run_id,
@@ -356,21 +494,42 @@ def create_calculation(payload: CalculationCreate, db: Session = Depends(get_db)
 
             for sensor_mode in get_sensor_modes_for_calculation(sensor):
                 mode_swath_km = get_mode_swath_km(sensor, sensor_mode)
-                mode_max_off_nadir_deg = get_mode_max_off_nadir_deg(
-                    sensor,
-                    sensor_mode,
-                )
+                catalog_max_off_nadir_deg = get_mode_max_off_nadir_deg(sensor, sensor_mode)
+                manual_max_off_nadir_deg = get_effective_manual_off_nadir_deg(payload, sensor)
+
+                mode_max_off_nadir_deg = manual_max_off_nadir_deg
 
                 if mode_swath_km is None:
                     continue
 
-                detected_windows = detect_observation_windows(
-                    track_points=track,
-                    aoi_geojson=aoi_geometry,
-                    swath_km=mode_swath_km,
-                    step_seconds=payload.step_seconds,
-                    max_off_nadir_deg=mode_max_off_nadir_deg,
-                )
+                if is_sar_sensor(sensor):
+                    sar_min_look_angle_deg = get_mode_sar_min_look_angle_deg(
+                        sensor_mode
+                    )
+                    sar_max_look_angle_deg = get_mode_sar_max_look_angle_deg(
+                        sensor_mode
+                    )
+                    sar_look_direction = get_effective_sar_look_direction(
+                        payload,
+                        sensor_mode,
+                    )
+
+                    detected_windows = detect_sar_observation_windows(
+                        track_points=track,
+                        aoi_geojson=aoi_geometry,
+                        step_seconds=payload.step_seconds,
+                        sar_min_look_angle_deg=sar_min_look_angle_deg,
+                        sar_max_look_angle_deg=sar_max_look_angle_deg,
+                        sar_look_direction=sar_look_direction,
+                    )
+                else:
+                    detected_windows = detect_observation_windows(
+                        track_points=track,
+                        aoi_geojson=aoi_geometry,
+                        swath_km=mode_swath_km,
+                        step_seconds=payload.step_seconds,
+                        max_off_nadir_deg=mode_max_off_nadir_deg,
+                    )
 
                 for detected_window in detected_windows:
                     if daylight_required and not detected_window.is_daylight:
@@ -385,29 +544,40 @@ def create_calculation(payload: CalculationCreate, db: Session = Depends(get_db)
                     ):
                         continue
 
-                    try:
-                        _, _, coverage_details = build_window_layer_and_coverage(
-                            satellite=satellite,
-                            sensor=sensor,
-                            tle_record=current_tle,
-                            aoi_geometry=aoi_geometry,
+                    if is_sar_sensor(sensor):
+                        coverage_percent = None
+                        reachable_coverage_percent = calculate_sar_reachable_coverage_percent(
+                            track_points=track,
+                            aoi_geojson=aoi_geometry,
+                            sar_min_look_angle_deg=detected_window.sar_min_look_angle_deg,
+                            sar_max_look_angle_deg=detected_window.sar_max_look_angle_deg,
                             access_start=detected_window.access_start,
                             access_end=detected_window.access_end,
-                            swath_km=mode_swath_km,
                         )
-                    except ValueError:
-                        coverage_details = {"coverage_percent": None}
+                    else:
+                        try:
+                            _, _, coverage_details = build_window_layer_and_coverage(
+                                satellite=satellite,
+                                sensor=sensor,
+                                tle_record=current_tle,
+                                aoi_geometry=aoi_geometry,
+                                access_start=detected_window.access_start,
+                                access_end=detected_window.access_end,
+                                swath_km=mode_swath_km,
+                            )
+                        except ValueError:
+                            coverage_details = {"coverage_percent": None}
 
-                    coverage_percent = coverage_details["coverage_percent"]
+                        coverage_percent = coverage_details["coverage_percent"]
 
-                    reachable_coverage_percent = calculate_reachable_coverage_percent(
-                        track_points=track,
-                        aoi_geojson=aoi_geometry,
-                        swath_km=mode_swath_km,
-                        max_off_nadir_deg=detected_window.max_off_nadir_deg,
-                        access_start=detected_window.access_start,
-                        access_end=detected_window.access_end,
-                    )
+                        reachable_coverage_percent = calculate_reachable_coverage_percent(
+                            track_points=track,
+                            aoi_geojson=aoi_geometry,
+                            swath_km=mode_swath_km,
+                            max_off_nadir_deg=detected_window.max_off_nadir_deg,
+                            access_start=detected_window.access_start,
+                            access_end=detected_window.access_end,
+                        )
 
                     coverage_for_filter = (
                         reachable_coverage_percent
@@ -445,6 +615,9 @@ def create_calculation(payload: CalculationCreate, db: Session = Depends(get_db)
                             ),
                             requires_pointing=detected_window.requires_pointing,
                             reachable_coverage_percent=reachable_coverage_percent,
+                            sar_min_look_angle_deg=detected_window.sar_min_look_angle_deg,
+                            sar_max_look_angle_deg=detected_window.sar_max_look_angle_deg,
+                            sar_look_direction=detected_window.sar_look_direction,
                         )
                     )
 
@@ -544,6 +717,9 @@ def get_calculation_results(calculation_run_id: int, db: Session = Depends(get_d
             reachable_coverage_percent=(
                 row.ObservationWindow.reachable_coverage_percent
             ),
+            sar_min_look_angle_deg=row.ObservationWindow.sar_min_look_angle_deg,
+            sar_max_look_angle_deg=row.ObservationWindow.sar_max_look_angle_deg,
+            sar_look_direction=row.ObservationWindow.sar_look_direction,
         )
         for row in rows
     ]
@@ -646,7 +822,25 @@ def get_window_map_layer(
 
     reachable_footprint = None
 
-    if window.requires_pointing:
+    if window.sar_min_look_angle_deg is not None:
+        footprint = None
+        coverage_details = calculate_footprint_coverage_details(
+            aoi_geojson=aoi_geometry,
+            footprint_geojson=None,
+        )
+        reachable_footprint = build_sar_window_footprint_layer(
+            satellite=satellite,
+            sensor=sensor,
+            tle_record=tle_record,
+            aoi_geometry=aoi_geometry,
+            access_start=window.access_start,
+            access_end=window.access_end,
+            sar_min_look_angle_deg=window.sar_min_look_angle_deg,
+            sar_max_look_angle_deg=window.sar_max_look_angle_deg,
+            sar_look_direction=window.sar_look_direction,
+        )
+
+    elif window.requires_pointing:
         reachable_footprint = build_reachable_window_footprint_layer(
             satellite=satellite,
             sensor=sensor,

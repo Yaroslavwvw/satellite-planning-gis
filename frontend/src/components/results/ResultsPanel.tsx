@@ -41,7 +41,6 @@ type Props = {
   observationFilters?: ObservationFilters
   onObservationFiltersChange?: Dispatch<SetStateAction<ObservationFilters>>
   showObservationFilters?: boolean
-
 }
 
 type ResultTab = 'windows' | 'satellites' | 'comparison'
@@ -71,19 +70,41 @@ function formatDuration(seconds: number) {
 }
 
 function formatCoverage(value: number | null | undefined) {
-  if (value === null || value === undefined) {
+  if (value == null) {
     return '—'
   }
 
-  return `${value}%`
+  return `${value.toFixed(1)}%`
 }
 
-function formatResolution(value: number | null) {
-  if (value === null || value === undefined) {
+function formatResolution(value: number | null | undefined) {
+  if (value == null) {
     return '—'
   }
 
   return `${value} м`
+}
+
+function formatKm(value: number | null | undefined) {
+  if (value == null) {
+    return '—'
+  }
+
+  return `${value.toFixed(0)} км`
+}
+
+function formatAngle(value: number | null | undefined) {
+  if (value == null) {
+    return '—'
+  }
+
+  return `${value.toFixed(1)}°`
+}
+
+function getSensorModeLabel(sensorModeName: string | null | undefined) {
+  const normalizedName = sensorModeName?.trim()
+
+  return normalizedName || 'Стандартный режим'
 }
 
 function buildCsv(
@@ -96,36 +117,50 @@ function buildCsv(
   const header = [
     'Спутник',
     'Сенсор',
+    'Режим съемки',
+    'Полоса, км',
     'Начало окна',
     'Конец окна',
     'Длительность, сек',
     'Покрытие AOI, %',
+    'Доступно при наведении, %',
+    'Требуется наведение',
+    'Требуемый угол, град',
+    'Макс. угол режима, град',
     'Разрешение анализа, м',
     ...(showUsedBands ? ['Используемые каналы'] : []),
   ]
 
   const rows = windows.map((item) => {
     const sensor = sensorById.get(item.sensor_id)
-    const analysisResolution = getAnalysisResolutionM(filters, sensor)
-    const matchingBandLines = getMatchingBandLines(filters, sensor)
     const resolution = getAnalysisResolutionM(filters, sensor)
 
     return [
       item.satellite_name,
       item.sensor_name,
+      getSensorModeLabel(item.sensor_mode_name),
+      item.swath_km != null ? String(item.swath_km) : '',
       item.access_start,
       item.access_end,
       String(item.duration_sec),
-      String(item.coverage_percent ?? ''),
-      resolution !== null ? String(resolution) : '',
-      ...(showUsedBands
-        ? [getMatchingBandLines(filters, sensor).join(' | ')]
-        : []),
+      item.coverage_percent != null ? String(item.coverage_percent) : '',
+      item.reachable_coverage_percent != null
+        ? String(item.reachable_coverage_percent)
+        : '',
+      item.requires_pointing ? 'да' : 'нет',
+      item.required_off_nadir_deg != null
+        ? String(item.required_off_nadir_deg)
+        : '',
+      item.max_off_nadir_deg != null ? String(item.max_off_nadir_deg) : '',
+      resolution != null ? String(resolution) : '',
+      ...(showUsedBands ? [getMatchingBandLines(filters, sensor).join(' | ')] : []),
     ]
   })
 
   return [header, ...rows]
-    .map((row) => row.map((cell) => `"${cell.replace(/"/g, '""')}"`).join(';'))
+    .map((row) =>
+      row.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(';'),
+    )
     .join('\n')
 }
 
@@ -146,13 +181,14 @@ export default function ResultsPanel({
 }: Props) {
   const [activeTab, setActiveTab] = useState<ResultTab>('windows')
   const [satelliteFilter, setSatelliteFilter] = useState('all')
+  const [sensorModeFilter, setSensorModeFilter] = useState('all')
   const [searchQuery, setSearchQuery] = useState('')
   const [localFilters, setLocalFilters] = useState<ObservationFilters>(
     DEFAULT_OBSERVATION_FILTERS,
   )
 
-const filters = observationFilters ?? localFilters
-const setFilters = onObservationFiltersChange ?? setLocalFilters
+  const filters = observationFilters ?? localFilters
+  const setFilters = onObservationFiltersChange ?? setLocalFilters
 
   const allWindows = result?.windows ?? []
 
@@ -183,25 +219,44 @@ const setFilters = onObservationFiltersChange ?? setLocalFilters
   }, [allWindows, satelliteById, sensorById, filters])
 
   const satelliteOptions = useMemo(() => {
-    const names = Array.from(new Set(allWindows.map((item) => item.satellite_name)))
-    return names.sort((a, b) => a.localeCompare(b))
-  }, [allWindows])
+    const names = Array.from(
+      new Set(observationFilteredWindows.map((item) => item.satellite_name)),
+    )
+
+    return names.sort((left, right) => left.localeCompare(right, 'ru'))
+  }, [observationFilteredWindows])
+
+  const sensorModeOptions = useMemo(() => {
+    const modeNames = observationFilteredWindows.map((item) =>
+      getSensorModeLabel(item.sensor_mode_name),
+    )
+
+    return Array.from(new Set(modeNames)).sort((left, right) =>
+      left.localeCompare(right, 'ru'),
+    )
+  }, [observationFilteredWindows])
 
   const filteredWindows = useMemo(() => {
+    const query = searchQuery.trim().toLowerCase()
+
     return observationFilteredWindows.filter((item) => {
+      const itemModeName = getSensorModeLabel(item.sensor_mode_name)
+
       const matchesSatellite =
         satelliteFilter === 'all' || item.satellite_name === satelliteFilter
 
-      const query = searchQuery.trim().toLowerCase()
+      const matchesSensorMode =
+        sensorModeFilter === 'all' || itemModeName === sensorModeFilter
 
       const matchesSearch =
         !query ||
         item.satellite_name.toLowerCase().includes(query) ||
-        item.sensor_name.toLowerCase().includes(query)
+        item.sensor_name.toLowerCase().includes(query) ||
+        itemModeName.toLowerCase().includes(query)
 
-      return matchesSatellite && matchesSearch
+      return matchesSatellite && matchesSensorMode && matchesSearch
     })
-  }, [observationFilteredWindows, satelliteFilter, searchQuery])
+  }, [observationFilteredWindows, satelliteFilter, sensorModeFilter, searchQuery])
 
   const availableSatellites = new Set(allWindows.map((item) => item.satellite_id)).size
   const nearestWindow = allWindows[0]
@@ -238,19 +293,22 @@ const setFilters = onObservationFiltersChange ?? setLocalFilters
       const existing = map.get(item.satellite_id)
       const hasCoverage =
         item.coverage_percent !== null && item.coverage_percent !== undefined
+      const sensorLabel = `${item.sensor_name} / ${getSensorModeLabel(
+        item.sensor_mode_name,
+      )}`
 
       if (!existing) {
         map.set(item.satellite_id, {
           satellite_id: item.satellite_id,
           satellite_name: item.satellite_name,
-          sensors: new Set([item.sensor_name]),
+          sensors: new Set([sensorLabel]),
           windows_count: 1,
           nearest_window: item.access_start,
           avg_coverage_sum: hasCoverage ? item.coverage_percent ?? 0 : 0,
           avg_coverage_count: hasCoverage ? 1 : 0,
         })
       } else {
-        existing.sensors.add(item.sensor_name)
+        existing.sensors.add(sensorLabel)
         existing.windows_count += 1
 
         if (new Date(item.access_start) < new Date(existing.nearest_window)) {
@@ -429,10 +487,22 @@ const setFilters = onObservationFiltersChange ?? setLocalFilters
                     ))}
                   </select>
 
+                  <select
+                    value={sensorModeFilter}
+                    onChange={(event) => setSensorModeFilter(event.target.value)}
+                  >
+                    <option value="all">Все режимы</option>
+                    {sensorModeOptions.map((modeName) => (
+                      <option key={modeName} value={modeName}>
+                        {modeName}
+                      </option>
+                    ))}
+                  </select>
+
                   <input
                     value={searchQuery}
                     onChange={(event) => setSearchQuery(event.target.value)}
-                    placeholder="Поиск по спутнику или сенсору"
+                    placeholder="Поиск по спутнику, сенсору или режиму"
                   />
                 </div>
               </div>
@@ -484,19 +554,18 @@ function ObservationFiltersPanel({
   visibleWindowsCount: number
   onChange: Dispatch<SetStateAction<ObservationFilters>>
 }) {
+  function toggleBandGroup(group: SpectralBandGroup) {
+    onChange((current) => {
+      const exists = current.manualBandGroups.includes(group)
 
-function toggleBandGroup(group: SpectralBandGroup) {
-  onChange((current) => {
-    const exists = current.manualBandGroups.includes(group)
-
-    return {
-      ...current,
-      manualBandGroups: exists
-        ? current.manualBandGroups.filter((item) => item !== group)
-        : [...current.manualBandGroups, group],
-    }
-  })
-} 
+      return {
+        ...current,
+        manualBandGroups: exists
+          ? current.manualBandGroups.filter((item) => item !== group)
+          : [...current.manualBandGroups, group],
+      }
+    })
+  }
 
   return (
     <div className="results-filters">
@@ -598,6 +667,7 @@ function toggleBandGroup(group: SpectralBandGroup) {
             <option value="sar">SAR</option>
           </select>
         </label>
+
         <div className="spectral-groups-filter">
           <span className="spectral-groups-filter-title">
             Спектральные группы
@@ -660,7 +730,6 @@ function ObservationWindowsTable({
   filters: ObservationFilters
   onToggleWindowLayer?: (windowId: number) => void
 }) {
-
   const showUsedBands = hasUsedBands(filters)
 
   return (
@@ -670,30 +739,31 @@ function ObservationWindowsTable({
           {showUsedBands ? (
             <>
               <col style={{ width: '14%' }} />
-              <col style={{ width: '9%' }} />
+              <col style={{ width: '12%' }} />
               <col style={{ width: '13%' }} />
               <col style={{ width: '13%' }} />
               <col style={{ width: '7%' }} />
+              <col style={{ width: '11%' }} />
               <col style={{ width: '10%' }} />
-              <col style={{ width: '10%' }} />
-              <col style={{ width: '24%' }} />
+              <col style={{ width: '20%' }} />
             </>
           ) : (
             <>
               <col style={{ width: '18%' }} />
+              <col style={{ width: '18%' }} />
+              <col style={{ width: '16%' }} />
+              <col style={{ width: '16%' }} />
+              <col style={{ width: '9%' }} />
               <col style={{ width: '13%' }} />
-              <col style={{ width: '17%' }} />
-              <col style={{ width: '17%' }} />
               <col style={{ width: '10%' }} />
-              <col style={{ width: '13%' }} />
-              <col style={{ width: '12%' }} />
             </>
           )}
         </colgroup>
+
         <thead>
           <tr>
             <th>Спутник</th>
-            <th>Сенсор</th>
+            <th>Сенсор / режим</th>
             <th>Начало окна</th>
             <th>Конец окна</th>
             <th>Длит.</th>
@@ -729,27 +799,69 @@ function ObservationWindowsTable({
                   />
                   {item.satellite_name}
                 </td>
-                <td>{item.sensor_name}</td>
+
+                <td>
+                  <div className="result-sensor-cell">
+                    <div className="result-sensor-name">
+                      {item.sensor_name}
+                    </div>
+
+                    <div className="result-mode-badge">
+                      {getSensorModeLabel(item.sensor_mode_name)}
+                    </div>
+
+                    {item.swath_km != null && (
+                      <div className="result-mode-meta">
+                        Полоса: {formatKm(item.swath_km)}
+                      </div>
+                    )}
+                  </div>
+                </td>
+
                 <td>{formatDateTime(item.access_start)}</td>
                 <td>{formatDateTime(item.access_end)}</td>
                 <td>{formatDuration(item.duration_sec)}</td>
-                <td>{formatCoverage(item.coverage_percent)}</td>
+
+                <td>
+                  <div className="result-coverage-cell">
+                    <div className="result-coverage-main">
+                      {formatCoverage(item.coverage_percent)}
+                    </div>
+
+                    {item.requires_pointing &&
+                      item.reachable_coverage_percent != null && (
+                        <div className="result-coverage-pointing">
+                          доступно при наведении:{' '}
+                          {formatCoverage(item.reachable_coverage_percent)}
+                        </div>
+                      )}
+
+                    {item.requires_pointing && (
+                      <div
+                        className="result-pointing-badge"
+                        title={`AOI находится в зоне возможного наведения. Требуемый угол: ${formatAngle(
+                          item.required_off_nadir_deg,
+                        )}, максимум режима: ${formatAngle(item.max_off_nadir_deg)}`}
+                      >
+                        требуется наведение
+                      </div>
+                    )}
+                  </div>
+                </td>
+
                 <td>{formatResolution(analysisResolution)}</td>
 
-                  {showUsedBands && (
-                    <td className="used-bands-cell">
-                      <div className="used-bands-list">
-                        {matchingBandLines.map((line) => (
-                          <div key={line} className="used-band-item">
-                            {line}
-                          </div>
-                        ))}
-                      </div>
-                    </td>
-                  )}
-                <td className="used-bands-cell">
-                  {/* {getMatchingBandsLabel(filters.task, sensor)} */}
-                </td>
+                {showUsedBands && (
+                  <td className="used-bands-cell">
+                    <div className="used-bands-list">
+                      {matchingBandLines.map((line) => (
+                        <div key={line} className="used-band-item">
+                          {line}
+                        </div>
+                      ))}
+                    </div>
+                  </td>
+                )}
               </tr>
             )
           })}

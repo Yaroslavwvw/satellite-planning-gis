@@ -1,7 +1,7 @@
 from datetime import datetime
 
 from sqlalchemy import BigInteger, DateTime, ForeignKey, Integer, Numeric
-from sqlalchemy import Float, Integer, Boolean
+from sqlalchemy import Float, Integer, Boolean, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
@@ -56,5 +56,8 @@ class ObservationWindow(Base):
     
 
     swath_km: Mapped[float | None] = mapped_column(Float, nullable=True)
+    sar_min_look_angle_deg: Mapped[float | None] = mapped_column(Float, nullable=True)
+    sar_max_look_angle_deg: Mapped[float | None] = mapped_column(Float, nullable=True)
+    sar_look_direction: Mapped[str | None] = mapped_column(String(20), nullable=True)
 
     calculation_run = relationship("CalculationRun", back_populates="observation_windows")

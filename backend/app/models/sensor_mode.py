@@ -23,4 +23,8 @@ class SensorMode(Base):
     is_default: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
 
+    sar_min_look_angle_deg: Mapped[float | None] = mapped_column(Float, nullable=True)
+    sar_max_look_angle_deg: Mapped[float | None] = mapped_column(Float, nullable=True)
+    sar_look_direction: Mapped[str | None] = mapped_column(String(20), nullable=True)
+
     sensor = relationship("Sensor", back_populates="modes")

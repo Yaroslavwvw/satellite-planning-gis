@@ -1784,3 +1784,60 @@ button {
   background: #eef4ff;
   color: #1e3a5f;
 }
+
+/* Блок: сенсор, режим съёмки и параметры режима в таблице результатов */
+.result-sensor-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+/* Блок: название сенсора в таблице результатов */
+.result-sensor-name {
+  font-weight: 600;
+}
+
+/* Блок: бейдж режима съёмки */
+.result-mode-badge {
+  width: fit-content;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 500;
+  background: rgba(59, 130, 246, 0.12);
+  color: #2563eb;
+}
+
+/* Блок: дополнительные параметры режима съёмки */
+.result-mode-meta {
+  font-size: 12px;
+  opacity: 0.7;
+}
+
+/* Блок: покрытие AOI в таблице результатов */
+.result-coverage-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+/* Блок: основное покрытие номинальной полосой */
+.result-coverage-main {
+  font-weight: 600;
+}
+
+/* Блок: покрытие с учётом возможного наведения */
+.result-coverage-pointing {
+  font-size: 12px;
+  color: #047857;
+}
+
+/* Блок: бейдж необходимости бокового наведения */
+.result-pointing-badge {
+  width: fit-content;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  background: rgba(245, 158, 11, 0.14);
+  color: #b45309;
+}

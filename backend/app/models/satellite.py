@@ -16,6 +16,7 @@ class Satellite(Base):
     orbit_type: Mapped[str | None] = mapped_column(String(100), nullable=True)
     inclination_deg: Mapped[float | None] = mapped_column(Numeric(6, 3), nullable=True)
     orbital_period_min: Mapped[float | None] = mapped_column(Numeric(8, 3), nullable=True)
+    mean_altitude_km: Mapped[float | None] = mapped_column(Float, nullable=True)
     avg_altitude_km: Mapped[float | None] = mapped_column(Numeric(8, 3), nullable=True)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     data_access_type: Mapped[str | None] = mapped_column(String(50), nullable=True)

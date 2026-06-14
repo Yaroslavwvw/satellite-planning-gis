@@ -53,6 +53,7 @@ class SatelliteRead(BaseModel):
     mission_type: str | None = None
     orbit_type: str | None = None
     inclination_deg: float | None = None
+    mean_altitude_km: float | None = None
     orbital_period_min: float | None = None
     avg_altitude_km: float | None = None
     description: str | None = None

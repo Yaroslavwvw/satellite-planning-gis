@@ -7,6 +7,11 @@ class CalculationCreate(BaseModel):
     aoi_id: int
     period_start: datetime
     period_end: datetime
+
+    off_nadir_enabled: bool = False
+    manual_off_nadir_deg: float | None = Field(default=None, ge=0, lt=90)
+    sar_look_direction: str = "both"
+
     step_seconds: int = Field(default=60, gt=0)
     mode: str = Field(default="all_catalog")
     satellite_ids: list[int] = Field(default_factory=list)
@@ -17,6 +22,23 @@ class CalculationCreate(BaseModel):
         if mode not in {"all_catalog", "selected"}:
             raise ValueError("mode must be 'all_catalog' or 'selected'")
         return mode
+
+    @field_validator("sar_look_direction")
+    @classmethod
+    def validate_sar_look_direction(cls, sar_look_direction: str):
+        if sar_look_direction not in {"left", "right", "both"}:
+            raise ValueError("sar_look_direction must be 'left', 'right' or 'both'")
+        return sar_look_direction
+
+    @field_validator("manual_off_nadir_deg")
+    @classmethod
+    def validate_manual_off_nadir_deg(cls, manual_off_nadir_deg: float | None, info):
+        off_nadir_enabled = info.data.get("off_nadir_enabled")
+
+        if off_nadir_enabled and manual_off_nadir_deg is None:
+            raise ValueError("manual_off_nadir_deg is required when off_nadir_enabled is true")
+
+        return manual_off_nadir_deg
 
     @field_validator("period_end")
     @classmethod
@@ -40,6 +62,11 @@ class CalculationRead(BaseModel):
     aoi_id: int
     period_start: datetime
     period_end: datetime
+
+    off_nadir_enabled: bool = False
+    manual_off_nadir_deg: float | None = None
+    sar_look_direction: str = "both"
+
     step_seconds: int
     mode: str
     status: str
@@ -79,6 +106,11 @@ class ObservationWindowRead(BaseModel):
     required_off_nadir_deg: float | None = None
     requires_pointing: bool = False
     reachable_coverage_percent: float | None = None
+
+    sar_min_look_angle_deg: float | None = None
+    sar_max_look_angle_deg: float | None = None
+    sar_look_direction: str | None = None
+
 
 class TrackLayerRead(BaseModel):
     satellite_id: int

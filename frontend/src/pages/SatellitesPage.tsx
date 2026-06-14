@@ -182,8 +182,8 @@ export default function SatellitesPage() {
                 <ParameterRow
                   label="Средняя высота орбиты"
                   value={
-                    selectedSatellite.avg_altitude_km !== null
-                      ? `${selectedSatellite.avg_altitude_km} км`
+                    selectedSatellite.avg_altitude_km != null
+                      ? `${selectedSatellite.avg_altitude_km.toFixed(1)} км`
                       : '—'
                   }
                 />
@@ -196,6 +196,9 @@ export default function SatellitesPage() {
                   multiline
                 />
               </div>
+              {selectedSatellite.data_access_note && (
+                <p className="muted-text">{selectedSatellite.data_access_note}</p>
+              )}
             </section>
 
             <section className="satellite-section-card">
