@@ -47,6 +47,7 @@ class ObservationWindow(Base):
     daylight_required: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     max_off_nadir_deg: Mapped[float | None] = mapped_column(Float, nullable=True)
     required_off_nadir_deg: Mapped[float | None] = mapped_column(Float, nullable=True)
+    required_off_nadir_max_deg: Mapped[float | None] = mapped_column(Float, nullable=True)
     requires_pointing: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     reachable_coverage_percent: Mapped[float | None] = mapped_column(Float, nullable=True)
     sensor_mode_id: Mapped[int | None] = mapped_column(

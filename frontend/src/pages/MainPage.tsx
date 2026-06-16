@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import MainLayout from '../components/layout/MainLayout'
 import MapPanel, { type AoiPoint } from '../components/map/MapPanel'
 import ResultsPanel from '../components/results/ResultsPanel'
@@ -61,6 +61,32 @@ function getWindowLayersKey(calculationRunId: number) {
   return `satellitePlanning.windowLayers.${calculationRunId}`
 }
 
+function getObservationFiltersKey(calculationRunId: number) {
+  return `satellitePlanning.observationFilters.${calculationRunId}`
+}
+
+function readSavedObservationFilters(
+  calculationRunId: number,
+): ObservationFilters | null {
+  try {
+    const raw = localStorage.getItem(getObservationFiltersKey(calculationRunId))
+
+    return raw ? (JSON.parse(raw) as ObservationFilters) : null
+  } catch {
+    return null
+  }
+}
+
+function saveObservationFilters(
+  calculationRunId: number,
+  filters: ObservationFilters,
+) {
+  localStorage.setItem(
+    getObservationFiltersKey(calculationRunId),
+    JSON.stringify(filters),
+  )
+}
+
 function clearMapSessionState() {
   for (let index = sessionStorage.length - 1; index >= 0; index -= 1) {
     const key = sessionStorage.key(index)
@@ -86,6 +112,7 @@ export default function MainPage() {
   const [observationFilters, setObservationFilters] = useState<ObservationFilters>(
     DEFAULT_OBSERVATION_FILTERS,
   )
+  const isRestoringObservationFiltersRef = useRef(false)
 
   const [message, setMessage] = useState<string>('')
   const [isLoadingSatellites, setIsLoadingSatellites] = useState(false)
@@ -103,6 +130,36 @@ export default function MainPage() {
     WindowMapLayerResponse[]
   >([])
   const [isLoadingWindowLayer, setIsLoadingWindowLayer] = useState(false)
+
+  useEffect(() => {
+    const calculationRunId = currentResult?.calculation_run.calculation_run_id
+
+    if (!calculationRunId) {
+      isRestoringObservationFiltersRef.current = true
+      setObservationFilters(DEFAULT_OBSERVATION_FILTERS)
+      return
+    }
+
+    const savedFilters = readSavedObservationFilters(calculationRunId)
+
+    isRestoringObservationFiltersRef.current = true
+    setObservationFilters(savedFilters ?? DEFAULT_OBSERVATION_FILTERS)
+  }, [currentResult?.calculation_run.calculation_run_id])
+
+  useEffect(() => {
+    const calculationRunId = currentResult?.calculation_run.calculation_run_id
+
+    if (isRestoringObservationFiltersRef.current) {
+      isRestoringObservationFiltersRef.current = false
+      return
+    }
+
+    if (!calculationRunId) {
+      return
+    }
+
+    saveObservationFilters(calculationRunId, observationFilters)
+  }, [currentResult?.calculation_run.calculation_run_id, observationFilters])
 
   useEffect(() => {
     const calculationRunId = currentResult?.calculation_run.calculation_run_id
@@ -263,6 +320,9 @@ export default function MainPage() {
         step_seconds: values.stepSeconds,
         mode: values.mode,
         satellite_ids: values.mode === 'selected' ? values.satelliteIds : [],
+        off_nadir_enabled: values.offNadirEnabled,
+        manual_off_nadir_deg: values.manualOffNadirDeg,
+        sar_look_direction: values.sarLookDirection,
       })
 
       const calculationId = calculation.calculation_run.calculation_run_id

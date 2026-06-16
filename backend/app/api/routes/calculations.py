@@ -32,6 +32,7 @@ from app.services.map_layers_service import (
     build_track_line_geojson,
     calculate_footprint_coverage_details,
     select_track_segment_near_aoi,
+    calculate_combined_footprint_coverage_details,
 )
 from app.services.orbit_service import generate_satellite_track
 from app.services.solar_service import is_daylight_required_for_sensor
@@ -44,6 +45,7 @@ from app.services.visibility_service import (
 from app.services.orbital_parameters_service import (
     calculate_orbital_parameters_from_tle,
 )
+from pydantic import BaseModel, Field
 
 router = APIRouter(prefix="/api/calculations", tags=["calculations"])
 
@@ -51,8 +53,17 @@ MIN_WINDOW_DURATION_SEC = 30
 MIN_OBSERVATION_SCORE = 0
 
 WINDOW_LAYER_PADDING_MINUTES = 5
-WINDOW_LAYER_STEP_SECONDS = 120
+WINDOW_LAYER_POINTS_PADDING = 20
+WINDOW_LAYER_STEP_SECONDS = 15
 MIN_COVERAGE_PERCENT = 0.1
+
+class AggregateCoverageRequest(BaseModel):
+    window_ids: list[int] = Field(default_factory=list)
+
+
+class AggregateCoverageResponse(BaseModel):
+    coverage_percent: float | None
+    window_count: int
 
 
 def get_sensor_modes_for_calculation(sensor: Sensor) -> list[SensorMode | None]:
@@ -168,6 +179,8 @@ def get_window_swath_km(window: ObservationWindow, sensor: Sensor) -> float | No
     return sensor.swath_km
 
 
+
+
 def to_db_datetime(value: datetime) -> datetime:
     if value.tzinfo is None:
         return value
@@ -201,8 +214,8 @@ def build_window_layer_and_coverage(
     local_track_points = select_track_segment_near_aoi(
         track_points=track_points,
         aoi_geojson=aoi_geometry,
-        points_before=3,
-        points_after=3,
+        points_before=WINDOW_LAYER_POINTS_PADDING,
+        points_after=WINDOW_LAYER_POINTS_PADDING,
     )
 
     if len(local_track_points) < 2:
@@ -282,8 +295,8 @@ def build_reachable_window_footprint_layer(
     local_track_points = select_track_segment_near_aoi(
         track_points=track_points,
         aoi_geojson=aoi_geometry,
-        points_before=3,
-        points_after=3,
+        points_before=WINDOW_LAYER_POINTS_PADDING,
+        points_after=WINDOW_LAYER_POINTS_PADDING,
     )
 
     if len(local_track_points) < 2:
@@ -336,8 +349,8 @@ def build_sar_window_footprint_layer(
     local_track_points = select_track_segment_near_aoi(
         track_points=track_points,
         aoi_geojson=aoi_geometry,
-        points_before=3,
-        points_after=3,
+        points_before=WINDOW_LAYER_POINTS_PADDING,
+        points_after=WINDOW_LAYER_POINTS_PADDING,
     )
 
     if len(local_track_points) < 2:
@@ -362,6 +375,73 @@ def build_sar_window_footprint_layer(
         swath_km=None,
         geometry=sar_geometry,
     )
+
+def build_window_coverage_geometry(
+    window: ObservationWindow,
+    satellite: Satellite,
+    sensor: Sensor,
+    tle_record: TLERecord,
+    aoi_geometry: dict,
+) -> dict | None:
+    window_swath_km = get_window_swath_km(window, sensor)
+
+    if window.sar_min_look_angle_deg is not None:
+        sar_layer = build_sar_window_footprint_layer(
+            satellite=satellite,
+            sensor=sensor,
+            tle_record=tle_record,
+            aoi_geometry=aoi_geometry,
+            access_start=window.access_start,
+            access_end=window.access_end,
+            sar_min_look_angle_deg=window.sar_min_look_angle_deg,
+            sar_max_look_angle_deg=window.sar_max_look_angle_deg,
+            sar_look_direction=window.sar_look_direction,
+        )
+
+        return sar_layer.geometry if sar_layer is not None else None
+
+    if window.requires_pointing:
+        reachable_layer = build_reachable_window_footprint_layer(
+            satellite=satellite,
+            sensor=sensor,
+            tle_record=tle_record,
+            aoi_geometry=aoi_geometry,
+            access_start=window.access_start,
+            access_end=window.access_end,
+            swath_km=window_swath_km,
+            max_off_nadir_deg=window.max_off_nadir_deg,
+        )
+
+        return reachable_layer.geometry if reachable_layer is not None else None
+
+    _, footprint_layer, _ = build_window_layer_and_coverage(
+        satellite=satellite,
+        sensor=sensor,
+        tle_record=tle_record,
+        aoi_geometry=aoi_geometry,
+        access_start=window.access_start,
+        access_end=window.access_end,
+        swath_km=window_swath_km,
+    )
+
+    return footprint_layer.geometry if footprint_layer is not None else None
+
+def calculate_layer_coverage_percent(
+    aoi_geometry: dict,
+    footprint_layer: FootprintLayerRead | None,
+) -> float | None:
+    if footprint_layer is None:
+        return None
+
+    if footprint_layer.geometry is None:
+        return None
+
+    coverage_details = calculate_footprint_coverage_details(
+        aoi_geojson=aoi_geometry,
+        footprint_geojson=footprint_layer.geometry,
+    )
+
+    return coverage_details["coverage_percent"]
 
 @router.post("", response_model=CalculationPlaceholderResponse)
 def create_calculation(payload: CalculationCreate, db: Session = Depends(get_db)):
@@ -532,8 +612,7 @@ def create_calculation(payload: CalculationCreate, db: Session = Depends(get_db)
                     )
 
                 for detected_window in detected_windows:
-                    if daylight_required and not detected_window.is_daylight:
-                        continue
+                    
 
                     if detected_window.duration_sec < MIN_WINDOW_DURATION_SEC:
                         continue
@@ -546,13 +625,22 @@ def create_calculation(payload: CalculationCreate, db: Session = Depends(get_db)
 
                     if is_sar_sensor(sensor):
                         coverage_percent = None
-                        reachable_coverage_percent = calculate_sar_reachable_coverage_percent(
-                            track_points=track,
-                            aoi_geojson=aoi_geometry,
-                            sar_min_look_angle_deg=detected_window.sar_min_look_angle_deg,
-                            sar_max_look_angle_deg=detected_window.sar_max_look_angle_deg,
+
+                        sar_layer = build_sar_window_footprint_layer(
+                            satellite=satellite,
+                            sensor=sensor,
+                            tle_record=current_tle,
+                            aoi_geometry=aoi_geometry,
                             access_start=detected_window.access_start,
                             access_end=detected_window.access_end,
+                            sar_min_look_angle_deg=detected_window.sar_min_look_angle_deg,
+                            sar_max_look_angle_deg=detected_window.sar_max_look_angle_deg,
+                            sar_look_direction=detected_window.sar_look_direction,
+                        )
+
+                        reachable_coverage_percent = calculate_layer_coverage_percent(
+                            aoi_geometry=aoi_geometry,
+                            footprint_layer=sar_layer,
                         )
                     else:
                         try:
@@ -570,14 +658,28 @@ def create_calculation(payload: CalculationCreate, db: Session = Depends(get_db)
 
                         coverage_percent = coverage_details["coverage_percent"]
 
-                        reachable_coverage_percent = calculate_reachable_coverage_percent(
-                            track_points=track,
-                            aoi_geojson=aoi_geometry,
-                            swath_km=mode_swath_km,
-                            max_off_nadir_deg=detected_window.max_off_nadir_deg,
-                            access_start=detected_window.access_start,
-                            access_end=detected_window.access_end,
-                        )
+                        reachable_coverage_percent = coverage_percent
+
+                        if detected_window.max_off_nadir_deg is not None:
+                            reachable_layer = build_reachable_window_footprint_layer(
+                                satellite=satellite,
+                                sensor=sensor,
+                                tle_record=current_tle,
+                                aoi_geometry=aoi_geometry,
+                                access_start=detected_window.access_start,
+                                access_end=detected_window.access_end,
+                                swath_km=mode_swath_km,
+                                max_off_nadir_deg=detected_window.max_off_nadir_deg,
+                            )
+
+                            layer_reachable_coverage_percent = calculate_layer_coverage_percent(
+                                aoi_geometry=aoi_geometry,
+                                footprint_layer=reachable_layer,
+                            )
+
+                            if layer_reachable_coverage_percent is not None:
+                                reachable_coverage_percent = layer_reachable_coverage_percent
+
 
                     coverage_for_filter = (
                         reachable_coverage_percent
@@ -613,6 +715,7 @@ def create_calculation(payload: CalculationCreate, db: Session = Depends(get_db)
                             required_off_nadir_deg=(
                                 detected_window.required_off_nadir_deg
                             ),
+                            required_off_nadir_max_deg=detected_window.required_off_nadir_max_deg,
                             requires_pointing=detected_window.requires_pointing,
                             reachable_coverage_percent=reachable_coverage_percent,
                             sar_min_look_angle_deg=detected_window.sar_min_look_angle_deg,
@@ -713,6 +816,7 @@ def get_calculation_results(calculation_run_id: int, db: Session = Depends(get_d
             daylight_required=row.ObservationWindow.daylight_required,
             max_off_nadir_deg=row.ObservationWindow.max_off_nadir_deg,
             required_off_nadir_deg=row.ObservationWindow.required_off_nadir_deg,
+            required_off_nadir_max_deg=row.ObservationWindow.required_off_nadir_max_deg,
             requires_pointing=row.ObservationWindow.requires_pointing,
             reachable_coverage_percent=(
                 row.ObservationWindow.reachable_coverage_percent
@@ -744,6 +848,93 @@ def get_calculation_results(calculation_run_id: int, db: Session = Depends(get_d
         windows=windows,
         tracks=[],
         footprints=[],
+    )
+
+
+@router.post(
+    "/{calculation_run_id}/aggregate-coverage",
+    response_model=AggregateCoverageResponse,
+)
+def calculate_aggregate_coverage(
+    calculation_run_id: int,
+    payload: AggregateCoverageRequest,
+    db: Session = Depends(get_db),
+):
+    run = db.get(CalculationRun, calculation_run_id)
+
+    if run is None:
+        raise HTTPException(status_code=404, detail="Calculation run not found")
+
+    window_ids = list(dict.fromkeys(payload.window_ids))
+
+    if not window_ids:
+        return AggregateCoverageResponse(
+            coverage_percent=None,
+            window_count=0,
+        )
+
+    aoi_geometry_raw = db.scalar(
+        select(func.ST_AsGeoJSON(AOI.geometry)).where(AOI.aoi_id == run.aoi_id)
+    )
+
+    if aoi_geometry_raw is None:
+        raise HTTPException(status_code=404, detail="AOI geometry not found")
+
+    aoi_geometry = json.loads(aoi_geometry_raw)
+
+    windows = list(
+        db.scalars(
+            select(ObservationWindow)
+            .where(ObservationWindow.calculation_run_id == calculation_run_id)
+            .where(ObservationWindow.window_id.in_(window_ids))
+            .order_by(ObservationWindow.access_start)
+        )
+    )
+
+    footprint_geometries: list[dict | None] = []
+
+    for window in windows:
+        satellite = db.get(Satellite, window.satellite_id)
+        sensor = db.get(Sensor, window.sensor_id)
+
+        if satellite is None or sensor is None:
+            continue
+
+        calculation_satellite = db.scalar(
+            select(CalculationRunSatellite)
+            .where(CalculationRunSatellite.calculation_run_id == calculation_run_id)
+            .where(CalculationRunSatellite.satellite_id == window.satellite_id)
+        )
+
+        if calculation_satellite is None:
+            continue
+
+        tle_record = db.get(TLERecord, calculation_satellite.tle_id)
+
+        if tle_record is None:
+            continue
+
+        try:
+            geometry = build_window_coverage_geometry(
+                window=window,
+                satellite=satellite,
+                sensor=sensor,
+                tle_record=tle_record,
+                aoi_geometry=aoi_geometry,
+            )
+        except ValueError:
+            geometry = None
+
+        footprint_geometries.append(geometry)
+
+    coverage_details = calculate_combined_footprint_coverage_details(
+        aoi_geojson=aoi_geometry,
+        footprint_geojson_list=footprint_geometries,
+    )
+
+    return AggregateCoverageResponse(
+        coverage_percent=coverage_details["coverage_percent"],
+        window_count=len(windows),
     )
 
 

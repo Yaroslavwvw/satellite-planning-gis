@@ -104,6 +104,7 @@ class ObservationWindowRead(BaseModel):
     swath_km: float | None = None
     max_off_nadir_deg: float | None = None
     required_off_nadir_deg: float | None = None
+    required_off_nadir_max_deg: float | None = None
     requires_pointing: bool = False
     reachable_coverage_percent: float | None = None
 

@@ -5,6 +5,9 @@ export type CalculationRequest = {
   step_seconds: number
   mode: 'all_catalog' | 'selected'
   satellite_ids: number[]
+  off_nadir_enabled: boolean
+  manual_off_nadir_deg: number | null
+  sar_look_direction: 'both' | 'left' | 'right'
 }
 
 export type CalculationRun = {
@@ -16,6 +19,9 @@ export type CalculationRun = {
   mode: string
   status: string
   created_at: string
+  off_nadir_enabled: boolean
+  manual_off_nadir_deg: number | null
+  sar_look_direction: 'both' | 'left' | 'right'
 }
 
 export type ObservationWindow = {
@@ -41,8 +47,12 @@ export type ObservationWindow = {
   swath_km: number | null
   max_off_nadir_deg: number | null
   required_off_nadir_deg: number | null
+  required_off_nadir_max_deg: number | null
   requires_pointing: boolean
   reachable_coverage_percent: number | null
+  sar_min_look_angle_deg: number | null
+  sar_max_look_angle_deg: number | null
+  sar_look_direction: 'left' | 'right' | 'both' | null
 }
 
 export type CalculationResultResponse = {
@@ -115,4 +125,9 @@ export type WindowMapLayerResponse = {
   aoi_area_km2?: number | null
   footprint_area_km2?: number | null
   intersection_area_km2?: number | null
+}
+
+export type AggregateCoverageResponse = {
+  coverage_percent: number | null
+  window_count: number
 }

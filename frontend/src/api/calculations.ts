@@ -1,5 +1,6 @@
 import { apiClient } from './client'
 import type {
+  AggregateCoverageResponse,
   CalculationPlaceholderResponse,
   CalculationRequest,
   CalculationResultResponse,
@@ -36,5 +37,19 @@ export async function fetchCalculationResults(
   const { data } = await apiClient.get<CalculationResultResponse>(
     `/api/calculations/${calculationId}/results`,
   )
+  return data
+}
+
+export async function fetchAggregateCoverage(
+  calculationRunId: number,
+  windowIds: number[],
+): Promise<AggregateCoverageResponse> {
+  const { data } = await apiClient.post<AggregateCoverageResponse>(
+    `/api/calculations/${calculationRunId}/aggregate-coverage`,
+    {
+      window_ids: windowIds,
+    },
+  )
+
   return data
 }

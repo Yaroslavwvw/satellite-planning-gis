@@ -22,6 +22,7 @@ class DetectedObservationWindow:
     is_daylight: bool | None = None
     max_off_nadir_deg: float | None = None
     required_off_nadir_deg: float | None = None
+    required_off_nadir_max_deg: float | None = None
     requires_pointing: bool = False
     sar_min_look_angle_deg: float | None = None
     sar_max_look_angle_deg: float | None = None
@@ -86,19 +87,190 @@ def _calculate_max_side_shift_km(
 
     return altitude_km * tan(radians(normalized_max_off_nadir_deg))
 
+def _iter_projected_geometry_coordinates(geometry):
+    if geometry.is_empty:
+        return
+
+    if geometry.geom_type == "Point":
+        yield geometry.x, geometry.y
+        return
+
+    if geometry.geom_type in {"LineString", "LinearRing"}:
+        yield from geometry.coords
+        return
+
+    if geometry.geom_type == "Polygon":
+        yield from geometry.exterior.coords
+
+        for interior in geometry.interiors:
+            yield from interior.coords
+
+        return
+
+    if hasattr(geometry, "geoms"):
+        for item in geometry.geoms:
+            yield from _iter_projected_geometry_coordinates(item)
+
+
+def _calculate_aoi_distance_range_km(
+    projected_point: Point,
+    projected_aoi,
+) -> tuple[float, float]:
+    nearest_distance_km = projected_point.distance(projected_aoi) / 1000.0
+
+    farthest_distance_m: float | None = None
+
+    for x, y in _iter_projected_geometry_coordinates(projected_aoi):
+        distance_m = projected_point.distance(Point(x, y))
+
+        if farthest_distance_m is None or distance_m > farthest_distance_m:
+            farthest_distance_m = distance_m
+
+    if farthest_distance_m is None:
+        farthest_distance_m = projected_point.distance(projected_aoi.centroid)
+
+    farthest_distance_km = farthest_distance_m / 1000.0
+
+    if farthest_distance_km < nearest_distance_km:
+        farthest_distance_km = nearest_distance_km
+
+    return nearest_distance_km, farthest_distance_km
+
+
+def _calculate_required_off_nadir_range_deg(
+    nearest_distance_km: float,
+    farthest_distance_km: float,
+    altitude_km: float,
+    half_swath_km: float,
+    max_off_nadir_deg: float | None,
+) -> tuple[float | None, float | None]:
+    if altitude_km <= 0:
+        return None, None
+
+    if half_swath_km <= 0:
+        return None, None
+
+    nearest_distance = max(0.0, nearest_distance_km)
+    farthest_distance = max(nearest_distance, farthest_distance_km)
+
+    min_shift_km = max(0.0, nearest_distance - half_swath_km)
+    max_required_shift_km = max(0.0, farthest_distance - half_swath_km)
+
+    normalized_max_off_nadir_deg = _normalize_max_off_nadir_deg(max_off_nadir_deg)
+
+    if normalized_max_off_nadir_deg is None:
+        if min_shift_km > 0:
+           _max_off_nadir_deg(max_off_nadir_deg)
+
+    if normalized_max_off_nadir_deg is None:
+        if min_shift_km > 0:
+            return None, None
+
+        return 0.0, 0.0
+
+    max_allowed_shift_km = _calculate_max_side_shift_km(
+        altitude_km=altitude_km,
+        max_off_nadir_deg=normalized_max_off_nadir_deg,
+    )
+
+    if min_shift_km > max_allowed_shift_km:
+        return None, None
+
+    max_shift_km = min(max_required_shift_km, max_allowed_shift_km)
+
+    if max_shift_km < min_shift_km:
+        max_shift_km = min_shift_km
+
+    min_angle_deg = degrees(atan(min_shift_km / altitude_km))
+    max_angle_deg = degrees(atan(max_shift_km / altitude_km))
+
+    return round(min_angle_deg, 2), round(max_angle_deg, 2)
+
+def _iter_projected_geometry_coordinates(geometry):
+    if geometry.is_empty:
+        return
+
+    if geometry.geom_type == "Point":
+        yield geometry.x, geometry.y
+        return
+
+    if geometry.geom_type in {"LineString", "LinearRing"}:
+        yield from geometry.coords
+        return
+
+    if geometry.geom_type == "Polygon":
+        yield from geometry.exterior.coords
+
+        for interior in geometry.interiors:
+            yield from interior.coords
+
+        return
+
+    if hasattr(geometry, "geoms"):
+        for item in geometry.geoms:
+            yield from _iter_projected_geometry_coordinates(item)
+
+
+def _calculate_aoi_distance_range_km(
+    projected_point: Point,
+    projected_aoi,
+) -> tuple[float, float]:
+    nearest_distance_km = projected_point.distance(projected_aoi) / 1000.0
+
+    farthest_distance_m: float | None = None
+
+    for x, y in _iter_projected_geometry_coordinates(projected_aoi):
+        distance_m = projected_point.distance(Point(x, y))
+
+        if farthest_distance_m is None or distance_m > farthest_distance_m:
+            farthest_distance_m = distance_m
+
+    if farthest_distance_m is None:
+        farthest_distance_m = projected_point.distance(projected_aoi.centroid)
+
+    farthest_distance_km = farthest_distance_m / 1000.0
+
+    if farthest_distance_km < nearest_distance_km:
+        farthest_distance_km = nearest_distance_km
+
+    return nearest_distance_km, farthest_distance_km
+
 
 def _calculate_required_off_nadir_deg(
-    distance_km: float,
+    nearest_distance_km: float,
+    farthest_distance_km: float,
     altitude_km: float,
     half_swath_km: float,
 ) -> float | None:
-    if distance_km <= half_swath_km:
-        return 0.0
+    """
+    Считает минимальный угол наведения не для касания AOI одним краем,
+    а для полезного положения полосы относительно AOI.
 
+    Логика:
+    1. Если штатная полоса уже накрывает AOI целиком — угол 0.
+    2. Если полоса шире AOI — нужен минимальный сдвиг, чтобы AOI целиком попал в полосу.
+    3. Если AOI шире полосы — нужен минимальный сдвиг, чтобы полоса целиком вошла в AOI.
+    """
     if altitude_km <= 0:
         return None
 
-    required_side_shift_km = distance_km - half_swath_km
+    if half_swath_km <= 0:
+        return None
+
+    nearest_distance = max(0.0, nearest_distance_km)
+    farthest_distance = max(nearest_distance, farthest_distance_km)
+
+    if farthest_distance <= half_swath_km:
+        return 0.0
+
+    aoi_radial_depth_km = farthest_distance - nearest_distance
+    full_swath_km = half_swath_km * 2.0
+
+    if full_swath_km >= aoi_radial_depth_km:
+        required_side_shift_km = max(0.0, farthest_distance - half_swath_km)
+    else:
+        required_side_shift_km = nearest_distance + half_swath_km
+
     required_off_nadir_deg = degrees(atan(required_side_shift_km / altitude_km))
 
     return round(required_off_nadir_deg, 2)
@@ -133,6 +305,7 @@ def _build_detected_observation_window(
     current_off_nadir_values: list[float],
     current_scores: list[float],
     current_required_off_nadir_values: list[float],
+    current_required_off_nadir_max_values: list[float] | None = None,
     max_off_nadir_deg: float | None,
     sar_min_look_angle_deg: float | None = None,
     sar_max_look_angle_deg: float | None = None,
@@ -152,6 +325,18 @@ def _build_detected_observation_window(
         else None
     )
 
+    required_off_nadir_max_deg = (
+        max(current_required_off_nadir_max_values)
+        if current_required_off_nadir_max_values
+        else required_off_nadir_deg
+    )
+
+    requires_pointing = (
+        max_off_nadir_deg is not None
+        and required_off_nadir_max_deg is not None
+        and required_off_nadir_max_deg > 0
+    )
+
     return DetectedObservationWindow(
         access_start=access_start,
         access_end=access_end,
@@ -167,9 +352,8 @@ def _build_detected_observation_window(
         is_daylight=solar_illumination.is_daylight,
         max_off_nadir_deg=max_off_nadir_deg,
         required_off_nadir_deg=required_off_nadir_deg,
-        requires_pointing=(
-            required_off_nadir_deg is not None and required_off_nadir_deg > 0
-        ),
+        required_off_nadir_max_deg=required_off_nadir_max_deg,
+        requires_pointing=requires_pointing,
         sar_min_look_angle_deg=sar_min_look_angle_deg,
         sar_max_look_angle_deg=sar_max_look_angle_deg,
         sar_look_direction=sar_look_direction,
@@ -213,8 +397,10 @@ def detect_observation_windows(
         x, y = transformer.transform(longitude, latitude)
         projected_point = Point(x, y)
 
-        distance_m = projected_point.distance(projected_aoi)
-        distance_km = distance_m / 1000.0
+        distance_km, farthest_distance_km = _calculate_aoi_distance_range_km(
+            projected_point=projected_point,
+            projected_aoi=projected_aoi,
+        )
         altitude_km = float(point.get("altitude_km") or 0)
 
         max_side_shift_km = _calculate_max_side_shift_km(
@@ -231,10 +417,14 @@ def detect_observation_windows(
                 half_swath_km=half_swath_km,
             )
 
-            required_off_nadir_deg = _calculate_required_off_nadir_deg(
-                distance_km=distance_km,
-                altitude_km=altitude_km,
-                half_swath_km=half_swath_km,
+            required_off_nadir_deg, required_off_nadir_max_deg = (
+                _calculate_required_off_nadir_range_deg(
+                    nearest_distance_km=distance_km,
+                    farthest_distance_km=farthest_distance_km,
+                    altitude_km=altitude_km,
+                    half_swath_km=half_swath_km,
+                    max_off_nadir_deg=normalized_max_off_nadir_deg,
+                )
             )
 
             visible_points.append(
@@ -245,6 +435,7 @@ def detect_observation_windows(
                     "off_nadir_deg": off_nadir_deg,
                     "observation_score": score,
                     "required_off_nadir_deg": required_off_nadir_deg,
+                    "required_off_nadir_max_deg": required_off_nadir_max_deg,
                 }
             )
 
@@ -259,6 +450,7 @@ def detect_observation_windows(
     current_off_nadir_values: list[float] = []
     current_elevation_values: list[float] = []
     current_required_off_nadir_values: list[float] = []
+    current_required_off_nadir_max_values: list[float] = []
 
     def add_metrics(point: dict[str, Any]):
         if point["observation_score"] is not None:
@@ -269,6 +461,10 @@ def detect_observation_windows(
             current_elevation_values.append(point["max_elevation_deg"])
         if point["required_off_nadir_deg"] is not None:
             current_required_off_nadir_values.append(point["required_off_nadir_deg"])
+        if point.get("required_off_nadir_max_deg") is not None:
+            current_required_off_nadir_max_values.append(
+                point["required_off_nadir_max_deg"]
+            )
 
     add_metrics(visible_points[0])
 
@@ -289,6 +485,7 @@ def detect_observation_windows(
                     current_off_nadir_values=current_off_nadir_values,
                     current_scores=current_scores,
                     current_required_off_nadir_values=current_required_off_nadir_values,
+                    current_required_off_nadir_max_values=current_required_off_nadir_max_values,
                     max_off_nadir_deg=normalized_max_off_nadir_deg,
                 )
             )
@@ -299,6 +496,7 @@ def detect_observation_windows(
             current_off_nadir_values = []
             current_elevation_values = []
             current_required_off_nadir_values = []
+            current_required_off_nadir_max_values = []
             add_metrics(point)
 
     windows.append(
@@ -310,6 +508,7 @@ def detect_observation_windows(
             current_off_nadir_values=current_off_nadir_values,
             current_scores=current_scores,
             current_required_off_nadir_values=current_required_off_nadir_values,
+            current_required_off_nadir_max_values=current_required_off_nadir_max_values,
             max_off_nadir_deg=normalized_max_off_nadir_deg,
         )
     )

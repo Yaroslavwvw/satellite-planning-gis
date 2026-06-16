@@ -31,7 +31,10 @@ export type ObservationFilters = {
   dataAccess: DataAccessFilter
   sensorType: SensorTypeFilter
   manualBandGroups: SpectralBandGroup[]
+  illumination: IlluminationFilter
 }
+
+export type IlluminationFilter = 'all' | 'day' | 'night'
 
 type Band = Sensor['bands'][number]
 
@@ -48,6 +51,7 @@ export const DEFAULT_OBSERVATION_FILTERS: ObservationFilters = {
   dataAccess: 'any',
   sensorType: 'any',
   manualBandGroups: [],
+  illumination: 'all',
 }
 
 export const OBSERVATION_TASK_LABELS: Record<ObservationTask, string> = {
@@ -82,6 +86,16 @@ export function isWindowSuitableByFilters({
   sensor: Sensor | undefined
   filters: ObservationFilters
 }) {
+
+  const matchesIllumination =
+    filters.illumination === 'all' ||
+    (filters.illumination === 'day' && window.is_daylight === true) ||
+    (filters.illumination === 'night' && window.is_daylight === false)
+
+  if (!matchesIllumination) {
+    return false
+  }
+  
   const coveragePercent = window.coverage_percent ?? 0
 
   if (coveragePercent < filters.minCoveragePercent) {
@@ -134,6 +148,23 @@ export function getMatchingBandLines(
   }
 
   return getFilterBandSelection(filters, sensor).bands.map(formatBandWithoutResolution)
+}
+
+export function getMatchingBandResolutionValues(
+  filters: ObservationFilters,
+  sensor: Sensor | undefined,
+) {
+  const bandSelection = getFilterBandSelection(filters, sensor)
+
+  if (!hasUsedBands(filters)) {
+    const bestResolution = getBestSensorResolutionM(sensor)
+
+    return bestResolution !== null ? [bestResolution] : []
+  }
+
+  return bandSelection.bands
+    .map((band) => band.spatial_resolution_m)
+    .filter((value): value is number => value !== null && value !== undefined)
 }
 
 export function getBestSensorResolutionM(sensor: Sensor | undefined) {

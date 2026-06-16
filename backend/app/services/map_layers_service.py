@@ -764,6 +764,1617 @@ def calculate_footprint_coverage_details(
         "intersection_area_km2": round(intersection_area / 1_000_000, 3),
     }
 
+def calculate_combined_footprint_coverage_details(
+    aoi_geojson: dict[str, Any],
+    footprint_geojson_list: list[dict[str, Any] | None],
+) -> dict[str, float | None]:
+    footprint_geojson_list = [
+        item for item in footprint_geojson_list if item is not None
+    ]
+
+    if not footprint_geojson_list:
+        return {
+            "coverage_percent": None,
+            "aoi_area_km2": None,
+            "footprint_area_km2": None,
+            "intersection_area_km2": None,
+        }
+
+    center_lon, _ = _get_aoi_centroid(aoi_geojson)
+
+    normalized_aoi_geojson = _normalize_geojson_longitudes(
+        aoi_geojson,
+        center_lon,
+    )
+
+    to_local = _get_coverage_transformer(normalized_aoi_geojson)
+
+    aoi_local = transform(to_local.transform, shape(normalized_aoi_geojson))
+    aoi_local = _make_geometry_valid(aoi_local)
+
+    if aoi_local.is_empty or aoi_local.area <= 0:
+        return {
+            "coverage_percent": None,
+            "aoi_area_km2": None,
+            "footprint_area_km2": None,
+            "intersection_area_km2": None,
+        }
+
+    footprint_geometries = []
+
+    for footprint_geojson in footprint_geojson_list:
+        normalized_footprint_geojson = _normalize_geojson_longitudes(
+            footprint_geojson,
+            center_lon,
+        )
+
+        footprint_local = transform(
+            to_local.transform,
+            shape(normalized_footprint_geojson),
+        )
+        footprint_local = _make_geometry_valid(footprint_local)
+
+        if not footprint_local.is_empty:
+            footprint_geometries.append(footprint_local)
+
+    if not footprint_geometries:
+        return {
+            "coverage_percent": 0.0,
+            "aoi_area_km2": round(aoi_local.area / 1_000_000, 3),
+            "footprint_area_km2": 0.0,
+            "intersection_area_km2": 0.0,
+        }
+
+    combined_footprint = unary_union(footprint_geometries)
+    combined_footprint = _make_geometry_valid(combined_footprint)
+
+    intersection = combined_footprint.intersection(aoi_local)
+    intersection = _make_geometry_valid(intersection)
+
+    intersection_area = 0.0 if intersection.is_empty else intersection.area
+
+    coverage_percent = (intersection_area / aoi_local.area) * 100.0
+    coverage_percent = max(0.0, min(100.0, coverage_percent))
+
+    return {
+        "coverage_percent": round(coverage_percent, 1),
+        "aoi_area_km2": round(aoi_local.area / 1_000_000, 3),
+        "footprint_area_km2": round(combined_footprint.area / 1_000_000, 3),
+        "intersection_area_km2": round(intersection_area / 1_000_000, 3),
+    }
+
+# from typing import Any
+
+# from pyproj import Geod, Transformer
+# from shapely.geometry import Point, shape
+# from shapely.ops import transform, unary_union
+
+# GEOD = Geod(ellps="WGS84")
+
+
+# def _get_aoi_centroid(aoi_geojson: dict[str, Any]) -> tuple[float, float]:
+#     aoi_geometry = shape(aoi_geojson)
+#     centroid = aoi_geometry.centroid
+#     return centroid.x, centroid.y
+
+
+# def _normalize_longitude_near_center(longitude: float, center_longitude: float) -> float:
+#     normalized = longitude
+
+#     while normalized - center_longitude > 180:
+#         normalized -= 360
+
+#     while normalized - center_longitude < -180:
+#         normalized += 360
+
+#     return normalized
+
+
+# def _get_local_aeqd_transformer(aoi_geojson: dict[str, Any]) -> Transformer:
+#     center_lon, center_lat = _get_aoi_centroid(aoi_geojson)
+
+#     local_crs = (
+#         f"+proj=aeqd +lat_0={center_lat} +lon_0={center_lon} "
+#         "+datum=WGS84 +units=m +no_defs"
+#     )
+
+#     return Transformer.from_crs(
+#         "EPSG:4326",
+#         local_crs,
+#         always_xy=True,
+#     )
+
+
+# def _project_aoi(aoi_geojson: dict[str, Any], to_local: Transformer):
+#     return transform(to_local.transform, shape(aoi_geojson))
+
+
+# def _distance_km_between_points(
+#     lon1: float,
+#     lat1: float,
+#     lon2: float,
+#     lat2: float,
+# ) -> float:
+#     _, _, distance_m = GEOD.inv(lon1, lat1, lon2, lat2)
+#     return abs(distance_m) / 1000.0
+
+
+# def _get_aoi_diagonal_km(aoi_geojson: dict[str, Any]) -> float:
+#     aoi_geometry = shape(aoi_geojson)
+#     min_lon, min_lat, max_lon, max_lat = aoi_geometry.bounds
+
+#     _, _, distance_m = GEOD.inv(min_lon, min_lat, max_lon, max_lat)
+
+#     return abs(distance_m) / 1000.0
+
+
+# def _get_track_point_distance_to_aoi_m(
+#     point: dict[str, Any],
+#     projected_aoi,
+#     to_local: Transformer,
+#     center_lon: float,
+# ) -> float | None:
+#     longitude = point.get("longitude")
+#     latitude = point.get("latitude")
+
+#     if longitude is None or latitude is None:
+#         return None
+
+#     normalized_longitude = _normalize_longitude_near_center(longitude, center_lon)
+
+#     x, y = to_local.transform(normalized_longitude, latitude)
+
+#     return projected_aoi.distance(Point(x, y))
+
+
+# def select_track_segment_near_aoi(
+#     track_points: list[dict[str, Any]],
+#     aoi_geojson: dict[str, Any],
+#     swath_km: float | None = None,
+#     min_segment_km: float = 250.0,
+#     max_segment_km: float = 4500.0,
+# ) -> list[dict[str, Any]]:
+#     """
+#     Адаптивно выбирает участок трассы около AOI.
+
+#     Не берём фиксированные 2-3 точки, потому что:
+#     - для маленькой AOI это может быть слишком много;
+#     - для большой AOI это может быть слишком мало;
+#     - для широкого сенсора нужен более длинный пояс визуализации.
+#     """
+#     if len(track_points) < 2:
+#         return []
+
+#     center_lon, _ = _get_aoi_centroid(aoi_geojson)
+#     to_local = _get_local_aeqd_transformer(aoi_geojson)
+#     projected_aoi = _project_aoi(aoi_geojson, to_local)
+
+#     best_index: int | None = None
+#     best_distance_m: float | None = None
+
+#     for index, point in enumerate(track_points):
+#         distance_m = _get_track_point_distance_to_aoi_m(
+#             point=point,
+#             projected_aoi=projected_aoi,
+#             to_local=to_local,
+#             center_lon=center_lon,
+#         )
+
+#         if distance_m is None:
+#             continue
+
+#         if best_distance_m is None or distance_m < best_distance_m:
+#             best_distance_m = distance_m
+#             best_index = index
+
+#     if best_index is None:
+#         return []
+
+#     aoi_diagonal_km = _get_aoi_diagonal_km(aoi_geojson)
+
+#     swath_value_km = float(swath_km) if swath_km is not None else 0.0
+
+#     # Длина визуального сегмента:
+#     # - зависит от размера AOI;
+#     # - зависит от ширины полосы;
+#     # - но ограничена сверху, чтобы не рисовать половину орбиты.
+#     target_segment_km = max(
+#         min_segment_km,
+#         aoi_diagonal_km * 1.2,
+#         swath_value_km * 0.75,
+#     )
+
+#     target_segment_km = min(target_segment_km, max_segment_km)
+
+#     target_each_side_km = target_segment_km / 2.0
+
+#     start_index = best_index
+#     end_index = best_index
+
+#     distance_left_km = 0.0
+
+#     while start_index > 0 and distance_left_km < target_each_side_km:
+#         current = track_points[start_index]
+#         previous = track_points[start_index - 1]
+
+#         current_lon = current.get("longitude")
+#         current_lat = current.get("latitude")
+#         previous_lon = previous.get("longitude")
+#         previous_lat = previous.get("latitude")
+
+#         if None in (current_lon, current_lat, previous_lon, previous_lat):
+#             break
+
+#         distance_left_km += _distance_km_between_points(
+#             previous_lon,
+#             previous_lat,
+#             current_lon,
+#             current_lat,
+#         )
+
+#         start_index -= 1
+
+#     distance_right_km = 0.0
+
+#     while end_index < len(track_points) - 1 and distance_right_km < target_each_side_km:
+#         current = track_points[end_index]
+#         next_point = track_points[end_index + 1]
+
+#         current_lon = current.get("longitude")
+#         current_lat = current.get("latitude")
+#         next_lon = next_point.get("longitude")
+#         next_lat = next_point.get("latitude")
+
+#         if None in (current_lon, current_lat, next_lon, next_lat):
+#             break
+
+#         distance_right_km += _distance_km_between_points(
+#             current_lon,
+#             current_lat,
+#             next_lon,
+#             next_lat,
+#         )
+
+#         end_index += 1
+
+#     segment = track_points[start_index : end_index + 1]
+
+#     if len(segment) < 2:
+#         return []
+
+#     return segment
+
+
+# def build_track_line_geojson(
+#     track_points: list[dict[str, Any]],
+#     aoi_geojson: dict[str, Any] | None = None,
+# ) -> dict[str, Any] | None:
+#     if len(track_points) < 2:
+#         return None
+
+#     center_lon = None
+
+#     if aoi_geojson is not None:
+#         center_lon, _ = _get_aoi_centroid(aoi_geojson)
+
+#     coordinates: list[list[float]] = []
+
+#     for point in track_points:
+#         longitude = point.get("longitude")
+#         latitude = point.get("latitude")
+
+#         if longitude is None or latitude is None:
+#             continue
+
+#         if center_lon is not None:
+#             longitude = _normalize_longitude_near_center(longitude, center_lon)
+
+#         coordinates.append([longitude, latitude])
+
+#     if len(coordinates) < 2:
+#         return None
+
+#     return {
+#         "type": "LineString",
+#         "coordinates": coordinates,
+#     }
+
+
+# def _get_track_azimuth_deg(
+#     track_points: list[dict[str, Any]],
+#     index: int,
+#     center_lon: float,
+# ) -> float | None:
+#     """
+#     Направление движения трассы в точке.
+#     Для внутренней точки берём направление от предыдущей к следующей.
+#     Для крайних — ближайший доступный сегмент.
+#     """
+#     if len(track_points) < 2:
+#         return None
+
+#     if index == 0:
+#         point_a = track_points[0]
+#         point_b = track_points[1]
+#     elif index == len(track_points) - 1:
+#         point_a = track_points[-2]
+#         point_b = track_points[-1]
+#     else:
+#         point_a = track_points[index - 1]
+#         point_b = track_points[index + 1]
+
+#     lon_a = point_a.get("longitude")
+#     lat_a = point_a.get("latitude")
+#     lon_b = point_b.get("longitude")
+#     lat_b = point_b.get("latitude")
+
+#     if None in (lon_a, lat_a, lon_b, lat_b):
+#         return None
+
+#     lon_a = _normalize_longitude_near_center(lon_a, center_lon)
+#     lon_b = _normalize_longitude_near_center(lon_b, center_lon)
+
+#     forward_azimuth, _, _ = GEOD.inv(lon_a, lat_a, lon_b, lat_b)
+
+#     return forward_azimuth
+
+
+# def _offset_point(
+#     longitude: float,
+#     latitude: float,
+#     azimuth_deg: float,
+#     distance_m: float,
+#     center_lon: float,
+# ) -> list[float]:
+#     offset_lon, offset_lat, _ = GEOD.fwd(
+#         longitude,
+#         latitude,
+#         azimuth_deg,
+#         distance_m,
+#     )
+
+#     offset_lon = _normalize_longitude_near_center(offset_lon, center_lon)
+
+#     return [offset_lon, offset_lat]
+
+
+# def build_footprint_corridor_geojson(
+#     track_points: list[dict[str, Any]],
+#     aoi_geojson: dict[str, Any],
+#     swath_km: float | None,
+# ) -> dict[str, Any] | None:
+#     """
+#     Геодезический corridor.
+
+#     Вместо shapely.buffer строим две границы полосы:
+#     - левая граница = точка трассы, смещённая на half_swath влево
+#     - правая граница = точка трассы, смещённая на half_swath вправо
+
+#     Это лучше для широких сенсоров, потому что ширина полосы задаётся
+#     как постоянное геодезическое расстояние на поверхности Земли.
+#     """
+#     if swath_km is None:
+#         return None
+
+#     swath_km_float = float(swath_km)
+
+#     if swath_km_float <= 0:
+#         return None
+
+#     if len(track_points) < 2:
+#         return None
+
+#     center_lon, _ = _get_aoi_centroid(aoi_geojson)
+#     half_swath_m = (swath_km_float * 1000.0) / 2.0
+
+#     left_edge: list[list[float]] = []
+#     right_edge: list[list[float]] = []
+
+#     for index, point in enumerate(track_points):
+#         longitude = point.get("longitude")
+#         latitude = point.get("latitude")
+
+#         if longitude is None or latitude is None:
+#             continue
+
+#         longitude = _normalize_longitude_near_center(longitude, center_lon)
+
+#         track_azimuth = _get_track_azimuth_deg(
+#             track_points=track_points,
+#             index=index,
+#             center_lon=center_lon,
+#         )
+
+#         if track_azimuth is None:
+#             continue
+
+#         left_azimuth = track_azimuth - 90.0
+#         right_azimuth = track_azimuth + 90.0
+
+#         left_edge.append(
+#             _offset_point(
+#                 longitude=longitude,
+#                 latitude=latitude,
+#                 azimuth_deg=left_azimuth,
+#                 distance_m=half_swath_m,
+#                 center_lon=center_lon,
+#             )
+#         )
+
+#         right_edge.append(
+#             _offset_point(
+#                 longitude=longitude,
+#                 latitude=latitude,
+#                 azimuth_deg=right_azimuth,
+#                 distance_m=half_swath_m,
+#                 center_lon=center_lon,
+#             )
+#         )
+
+#     if len(left_edge) < 2 or len(right_edge) < 2:
+#         return None
+
+#     polygon_ring = left_edge + list(reversed(right_edge))
+
+#     if polygon_ring[0] != polygon_ring[-1]:
+#         polygon_ring.append(polygon_ring[0])
+
+#     return {
+#         "type": "Polygon",
+#         "coordinates": [polygon_ring],
+#     }
+
+
+
+# from typing import Any
+
+# from pyproj import Geod, Transformer
+# from shapely.geometry import Point, shape
+# from shapely.ops import transform
+
+# GEOD = Geod(ellps="WGS84")
+
+
+# def _get_aoi_centroid(aoi_geojson: dict[str, Any]) -> tuple[float, float]:
+#     aoi_geometry = shape(aoi_geojson)
+#     centroid = aoi_geometry.centroid
+#     return centroid.x, centroid.y
+
+
+# def _normalize_longitude_near_center(longitude: float, center_longitude: float) -> float:
+#     normalized = longitude
+
+#     while normalized - center_longitude > 180:
+#         normalized -= 360
+
+#     while normalized - center_longitude < -180:
+#         normalized += 360
+
+#     return normalized
+
+
+# def _get_local_aeqd_transformer(aoi_geojson: dict[str, Any]) -> Transformer:
+#     center_lon, center_lat = _get_aoi_centroid(aoi_geojson)
+
+#     local_crs = (
+#         f"+proj=aeqd +lat_0={center_lat} +lon_0={center_lon} "
+#         "+datum=WGS84 +units=m +no_defs"
+#     )
+
+#     return Transformer.from_crs(
+#         "EPSG:4326",
+#         local_crs,
+#         always_xy=True,
+#     )
+
+
+# def _project_aoi(aoi_geojson: dict[str, Any], to_local: Transformer):
+#     return transform(to_local.transform, shape(aoi_geojson))
+
+
+# def _distance_km_between_points(
+#     lon1: float,
+#     lat1: float,
+#     lon2: float,
+#     lat2: float,
+# ) -> float:
+#     _, _, distance_m = GEOD.inv(lon1, lat1, lon2, lat2)
+#     return abs(distance_m) / 1000.0
+
+
+# def _get_aoi_diagonal_km(aoi_geojson: dict[str, Any]) -> float:
+#     aoi_geometry = shape(aoi_geojson)
+#     min_lon, min_lat, max_lon, max_lat = aoi_geometry.bounds
+
+#     _, _, distance_m = GEOD.inv(min_lon, min_lat, max_lon, max_lat)
+
+#     return abs(distance_m) / 1000.0
+
+
+# def _get_track_point_distance_to_aoi_m(
+#     point: dict[str, Any],
+#     projected_aoi,
+#     to_local: Transformer,
+#     center_lon: float,
+# ) -> float | None:
+#     longitude = point.get("longitude")
+#     latitude = point.get("latitude")
+
+#     if longitude is None or latitude is None:
+#         return None
+
+#     normalized_longitude = _normalize_longitude_near_center(longitude, center_lon)
+
+#     x, y = to_local.transform(normalized_longitude, latitude)
+
+#     return projected_aoi.distance(Point(x, y))
+
+
+# def select_track_segment_near_aoi(
+#     track_points: list[dict[str, Any]],
+#     aoi_geojson: dict[str, Any],
+#     swath_km: float | None = None,
+#     min_segment_km: float = 250.0,
+#     max_segment_km: float = 4500.0,
+# ) -> list[dict[str, Any]]:
+#     """
+#     Адаптивно выбирает участок трассы около AOI.
+
+#     Не берём фиксированные 2-3 точки, потому что:
+#     - для маленькой AOI это может быть слишком много;
+#     - для большой AOI это может быть слишком мало;
+#     - для широкого сенсора нужен более длинный пояс визуализации.
+#     """
+#     if len(track_points) < 2:
+#         return []
+
+#     center_lon, _ = _get_aoi_centroid(aoi_geojson)
+#     to_local = _get_local_aeqd_transformer(aoi_geojson)
+#     projected_aoi = _project_aoi(aoi_geojson, to_local)
+
+#     best_index: int | None = None
+#     best_distance_m: float | None = None
+
+#     for index, point in enumerate(track_points):
+#         distance_m = _get_track_point_distance_to_aoi_m(
+#             point=point,
+#             projected_aoi=projected_aoi,
+#             to_local=to_local,
+#             center_lon=center_lon,
+#         )
+
+#         if distance_m is None:
+#             continue
+
+#         if best_distance_m is None or distance_m < best_distance_m:
+#             best_distance_m = distance_m
+#             best_index = index
+
+#     if best_index is None:
+#         return []
+
+#     aoi_diagonal_km = _get_aoi_diagonal_km(aoi_geojson)
+
+#     swath_value_km = float(swath_km) if swath_km is not None else 0.0
+
+#     # Длина визуального сегмента:
+#     # - зависит от размера AOI;
+#     # - зависит от ширины полосы;
+#     # - но ограничена сверху, чтобы не рисовать половину орбиты.
+#     target_segment_km = max(
+#         min_segment_km,
+#         aoi_diagonal_km * 1.2,
+#         swath_value_km * 0.75,
+#     )
+
+#     target_segment_km = min(target_segment_km, max_segment_km)
+
+#     target_each_side_km = target_segment_km / 2.0
+
+#     start_index = best_index
+#     end_index = best_index
+
+#     distance_left_km = 0.0
+
+#     while start_index > 0 and distance_left_km < target_each_side_km:
+#         current = track_points[start_index]
+#         previous = track_points[start_index - 1]
+
+#         current_lon = current.get("longitude")
+#         current_lat = current.get("latitude")
+#         previous_lon = previous.get("longitude")
+#         previous_lat = previous.get("latitude")
+
+#         if None in (current_lon, current_lat, previous_lon, previous_lat):
+#             break
+
+#         distance_left_km += _distance_km_between_points(
+#             previous_lon,
+#             previous_lat,
+#             current_lon,
+#             current_lat,
+#         )
+
+#         start_index -= 1
+
+#     distance_right_km = 0.0
+
+#     while end_index < len(track_points) - 1 and distance_right_km < target_each_side_km:
+#         current = track_points[end_index]
+#         next_point = track_points[end_index + 1]
+
+#         current_lon = current.get("longitude")
+#         current_lat = current.get("latitude")
+#         next_lon = next_point.get("longitude")
+#         next_lat = next_point.get("latitude")
+
+#         if None in (current_lon, current_lat, next_lon, next_lat):
+#             break
+
+#         distance_right_km += _distance_km_between_points(
+#             current_lon,
+#             current_lat,
+#             next_lon,
+#             next_lat,
+#         )
+
+#         end_index += 1
+
+#     segment = track_points[start_index : end_index + 1]
+
+#     if len(segment) < 2:
+#         return []
+
+#     return segment
+
+
+# def build_track_line_geojson(
+#     track_points: list[dict[str, Any]],
+#     aoi_geojson: dict[str, Any] | None = None,
+# ) -> dict[str, Any] | None:
+#     if len(track_points) < 2:
+#         return None
+
+#     center_lon = None
+
+#     if aoi_geojson is not None:
+#         center_lon, _ = _get_aoi_centroid(aoi_geojson)
+
+#     coordinates: list[list[float]] = []
+
+#     for point in track_points:
+#         longitude = point.get("longitude")
+#         latitude = point.get("latitude")
+
+#         if longitude is None or latitude is None:
+#             continue
+
+#         if center_lon is not None:
+#             longitude = _normalize_longitude_near_center(longitude, center_lon)
+
+#         coordinates.append([longitude, latitude])
+
+#     if len(coordinates) < 2:
+#         return None
+
+#     return {
+#         "type": "LineString",
+#         "coordinates": coordinates,
+#     }
+
+
+# def _get_track_azimuth_deg(
+#     track_points: list[dict[str, Any]],
+#     index: int,
+#     center_lon: float,
+# ) -> float | None:
+#     """
+#     Направление движения трассы в точке.
+#     Для внутренней точки берём направление от предыдущей к следующей.
+#     Для крайних — ближайший доступный сегмент.
+#     """
+#     if len(track_points) < 2:
+#         return None
+
+#     if index == 0:
+#         point_a = track_points[0]
+#         point_b = track_points[1]
+#     elif index == len(track_points) - 1:
+#         point_a = track_points[-2]
+#         point_b = track_points[-1]
+#     else:
+#         point_a = track_points[index - 1]
+#         point_b = track_points[index + 1]
+
+#     lon_a = point_a.get("longitude")
+#     lat_a = point_a.get("latitude")
+#     lon_b = point_b.get("longitude")
+#     lat_b = point_b.get("latitude")
+
+#     if None in (lon_a, lat_a, lon_b, lat_b):
+#         return None
+
+#     lon_a = _normalize_longitude_near_center(lon_a, center_lon)
+#     lon_b = _normalize_longitude_near_center(lon_b, center_lon)
+
+#     forward_azimuth, _, _ = GEOD.inv(lon_a, lat_a, lon_b, lat_b)
+
+#     return forward_azimuth
+
+
+# def _offset_point(
+#     longitude: float,
+#     latitude: float,
+#     azimuth_deg: float,
+#     distance_m: float,
+#     center_lon: float,
+# ) -> list[float]:
+#     offset_lon, offset_lat, _ = GEOD.fwd(
+#         longitude,
+#         latitude,
+#         azimuth_deg,
+#         distance_m,
+#     )
+
+#     offset_lon = _normalize_longitude_near_center(offset_lon, center_lon)
+
+#     return [offset_lon, offset_lat]
+
+
+# def build_footprint_corridor_geojson(
+#     track_points: list[dict[str, Any]],
+#     aoi_geojson: dict[str, Any],
+#     swath_km: float | None,
+# ) -> dict[str, Any] | None:
+#     """
+#     Геодезический corridor.
+
+#     Вместо shapely.buffer строим две границы полосы:
+#     - левая граница = точка трассы, смещённая на half_swath влево
+#     - правая граница = точка трассы, смещённая на half_swath вправо
+
+#     Это лучше для широких сенсоров, потому что ширина полосы задаётся
+#     как постоянное геодезическое расстояние на поверхности Земли.
+#     """
+#     if swath_km is None:
+#         return None
+
+#     swath_km_float = float(swath_km)
+
+#     if swath_km_float <= 0:
+#         return None
+
+#     if len(track_points) < 2:
+#         return None
+
+#     center_lon, _ = _get_aoi_centroid(aoi_geojson)
+#     half_swath_m = (swath_km_float * 1000.0) / 2.0
+
+#     left_edge: list[list[float]] = []
+#     right_edge: list[list[float]] = []
+
+#     for index, point in enumerate(track_points):
+#         longitude = point.get("longitude")
+#         latitude = point.get("latitude")
+
+#         if longitude is None or latitude is None:
+#             continue
+
+#         longitude = _normalize_longitude_near_center(longitude, center_lon)
+
+#         track_azimuth = _get_track_azimuth_deg(
+#             track_points=track_points,
+#             index=index,
+#             center_lon=center_lon,
+#         )
+
+#         if track_azimuth is None:
+#             continue
+
+#         left_azimuth = track_azimuth - 90.0
+#         right_azimuth = track_azimuth + 90.0
+
+#         left_edge.append(
+#             _offset_point(
+#                 longitude=longitude,
+#                 latitude=latitude,
+#                 azimuth_deg=left_azimuth,
+#                 distance_m=half_swath_m,
+#                 center_lon=center_lon,
+#             )
+#         )
+
+#         right_edge.append(
+#             _offset_point(
+#                 longitude=longitude,
+#                 latitude=latitude,
+#                 azimuth_deg=right_azimuth,
+#                 distance_m=half_swath_m,
+#                 center_lon=center_lon,
+#             )
+#         )
+
+#     if len(left_edge) < 2 or len(right_edge) < 2:
+#         return None
+
+#     polygon_ring = left_edge + list(reversed(right_edge))
+
+#     if polygon_ring[0] != polygon_ring[-1]:
+#         polygon_ring.append(polygon_ring[0])
+
+#     return {
+#         "type": "Polygon",
+#         "coordinates": [polygon_ring],
+#     }
+
+
+
+# from typing import Any
+
+# from pyproj import Geod, Transformer
+# from shapely.geometry import Point, shape
+# from shapely.ops import transform, unary_union
+
+# GEOD = Geod(ellps="WGS84")
+
+
+# def _get_aoi_centroid(aoi_geojson: dict[str, Any]) -> tuple[float, float]:
+#     aoi_geometry = shape(aoi_geojson)
+#     centroid = aoi_geometry.centroid
+#     return centroid.x, centroid.y
+
+
+# def _normalize_longitude_near_center(longitude: float, center_longitude: float) -> float:
+#     normalized = longitude
+
+#     while normalized - center_longitude > 180:
+#         normalized -= 360
+
+#     while normalized - center_longitude < -180:
+#         normalized += 360
+
+#     return normalized
+
+
+# def _get_local_aeqd_transformer(aoi_geojson: dict[str, Any]) -> Transformer:
+#     center_lon, center_lat = _get_aoi_centroid(aoi_geojson)
+
+#     local_crs = (
+#         f"+proj=aeqd +lat_0={center_lat} +lon_0={center_lon} "
+#         "+datum=WGS84 +units=m +no_defs"
+#     )
+
+#     return Transformer.from_crs(
+#         "EPSG:4326",
+#         local_crs,
+#         always_xy=True,
+#     )
+
+
+# def _project_aoi(aoi_geojson: dict[str, Any], to_local: Transformer):
+#     return transform(to_local.transform, shape(aoi_geojson))
+
+
+# def _distance_km_between_points(
+#     lon1: float,
+#     lat1: float,
+#     lon2: float,
+#     lat2: float,
+# ) -> float:
+#     _, _, distance_m = GEOD.inv(lon1, lat1, lon2, lat2)
+#     return abs(distance_m) / 1000.0
+
+
+# def _get_aoi_diagonal_km(aoi_geojson: dict[str, Any]) -> float:
+#     aoi_geometry = shape(aoi_geojson)
+#     min_lon, min_lat, max_lon, max_lat = aoi_geometry.bounds
+
+#     _, _, distance_m = GEOD.inv(min_lon, min_lat, max_lon, max_lat)
+
+#     return abs(distance_m) / 1000.0
+
+
+# def _get_track_point_distance_to_aoi_m(
+#     point: dict[str, Any],
+#     projected_aoi,
+#     to_local: Transformer,
+#     center_lon: float,
+# ) -> float | None:
+#     longitude = point.get("longitude")
+#     latitude = point.get("latitude")
+
+#     if longitude is None or latitude is None:
+#         return None
+
+#     normalized_longitude = _normalize_longitude_near_center(longitude, center_lon)
+
+#     x, y = to_local.transform(normalized_longitude, latitude)
+
+#     return projected_aoi.distance(Point(x, y))
+
+
+# def select_track_segment_near_aoi(
+#     track_points: list[dict[str, Any]],
+#     aoi_geojson: dict[str, Any],
+#     swath_km: float | None = None,
+#     min_segment_km: float = 250.0,
+#     max_segment_km: float = 4500.0,
+# ) -> list[dict[str, Any]]:
+#     """
+#     Адаптивно выбирает участок трассы около AOI.
+
+#     Не берём фиксированные 2-3 точки, потому что:
+#     - для маленькой AOI это может быть слишком много;
+#     - для большой AOI это может быть слишком мало;
+#     - для широкого сенсора нужен более длинный пояс визуализации.
+#     """
+#     if len(track_points) < 2:
+#         return []
+
+#     center_lon, _ = _get_aoi_centroid(aoi_geojson)
+#     to_local = _get_local_aeqd_transformer(aoi_geojson)
+#     projected_aoi = _project_aoi(aoi_geojson, to_local)
+
+#     best_index: int | None = None
+#     best_distance_m: float | None = None
+
+#     for index, point in enumerate(track_points):
+#         distance_m = _get_track_point_distance_to_aoi_m(
+#             point=point,
+#             projected_aoi=projected_aoi,
+#             to_local=to_local,
+#             center_lon=center_lon,
+#         )
+
+#         if distance_m is None:
+#             continue
+
+#         if best_distance_m is None or distance_m < best_distance_m:
+#             best_distance_m = distance_m
+#             best_index = index
+
+#     if best_index is None:
+#         return []
+
+#     aoi_diagonal_km = _get_aoi_diagonal_km(aoi_geojson)
+
+#     swath_value_km = float(swath_km) if swath_km is not None else 0.0
+
+#     # Длина визуального сегмента:
+#     # - зависит от размера AOI;
+#     # - зависит от ширины полосы;
+#     # - но ограничена сверху, чтобы не рисовать половину орбиты.
+#     target_segment_km = max(
+#         min_segment_km,
+#         aoi_diagonal_km * 1.2,
+#         swath_value_km * 0.75,
+#     )
+
+#     target_segment_km = min(target_segment_km, max_segment_km)
+
+#     target_each_side_km = target_segment_km / 2.0
+
+#     start_index = best_index
+#     end_index = best_index
+
+#     distance_left_km = 0.0
+
+#     while start_index > 0 and distance_left_km < target_each_side_km:
+#         current = track_points[start_index]
+#         previous = track_points[start_index - 1]
+
+#         current_lon = current.get("longitude")
+#         current_lat = current.get("latitude")
+#         previous_lon = previous.get("longitude")
+#         previous_lat = previous.get("latitude")
+
+#         if None in (current_lon, current_lat, previous_lon, previous_lat):
+#             break
+
+#         distance_left_km += _distance_km_between_points(
+#             previous_lon,
+#             previous_lat,
+#             current_lon,
+#             current_lat,
+#         )
+
+#         start_index -= 1
+
+#     distance_right_km = 0.0
+
+#     while end_index < len(track_points) - 1 and distance_right_km < target_each_side_km:
+#         current = track_points[end_index]
+#         next_point = track_points[end_index + 1]
+
+#         current_lon = current.get("longitude")
+#         current_lat = current.get("latitude")
+#         next_lon = next_point.get("longitude")
+#         next_lat = next_point.get("latitude")
+
+#         if None in (current_lon, current_lat, next_lon, next_lat):
+#             break
+
+#         distance_right_km += _distance_km_between_points(
+#             current_lon,
+#             current_lat,
+#             next_lon,
+#             next_lat,
+#         )
+
+#         end_index += 1
+
+#     segment = track_points[start_index : end_index + 1]
+
+#     if len(segment) < 2:
+#         return []
+
+#     return segment
+
+
+# def build_track_line_geojson(
+#     track_points: list[dict[str, Any]],
+#     aoi_geojson: dict[str, Any] | None = None,
+# ) -> dict[str, Any] | None:
+#     if len(track_points) < 2:
+#         return None
+
+#     center_lon = None
+
+#     if aoi_geojson is not None:
+#         center_lon, _ = _get_aoi_centroid(aoi_geojson)
+
+#     coordinates: list[list[float]] = []
+
+#     for point in track_points:
+#         longitude = point.get("longitude")
+#         latitude = point.get("latitude")
+
+#         if longitude is None or latitude is None:
+#             continue
+
+#         if center_lon is not None:
+#             longitude = _normalize_longitude_near_center(longitude, center_lon)
+
+#         coordinates.append([longitude, latitude])
+
+#     if len(coordinates) < 2:
+#         return None
+
+#     return {
+#         "type": "LineString",
+#         "coordinates": coordinates,
+#     }
+
+
+# def _get_track_azimuth_deg(
+#     track_points: list[dict[str, Any]],
+#     index: int,
+#     center_lon: float,
+# ) -> float | None:
+#     """
+#     Направление движения трассы в точке.
+#     Для внутренней точки берём направление от предыдущей к следующей.
+#     Для крайних — ближайший доступный сегмент.
+#     """
+#     if len(track_points) < 2:
+#         return None
+
+#     if index == 0:
+#         point_a = track_points[0]
+#         point_b = track_points[1]
+#     elif index == len(track_points) - 1:
+#         point_a = track_points[-2]
+#         point_b = track_points[-1]
+#     else:
+#         point_a = track_points[index - 1]
+#         point_b = track_points[index + 1]
+
+#     lon_a = point_a.get("longitude")
+#     lat_a = point_a.get("latitude")
+#     lon_b = point_b.get("longitude")
+#     lat_b = point_b.get("latitude")
+
+#     if None in (lon_a, lat_a, lon_b, lat_b):
+#         return None
+
+#     lon_a = _normalize_longitude_near_center(lon_a, center_lon)
+#     lon_b = _normalize_longitude_near_center(lon_b, center_lon)
+
+#     forward_azimuth, _, _ = GEOD.inv(lon_a, lat_a, lon_b, lat_b)
+
+#     return forward_azimuth
+
+
+# def _offset_point(
+#     longitude: float,
+#     latitude: float,
+#     azimuth_deg: float,
+#     distance_m: float,
+#     center_lon: float,
+# ) -> list[float]:
+#     offset_lon, offset_lat, _ = GEOD.fwd(
+#         longitude,
+#         latitude,
+#         azimuth_deg,
+#         distance_m,
+#     )
+
+#     offset_lon = _normalize_longitude_near_center(offset_lon, center_lon)
+
+#     return [offset_lon, offset_lat]
+
+
+# def build_footprint_corridor_geojson(
+#     track_points: list[dict[str, Any]],
+#     aoi_geojson: dict[str, Any],
+#     swath_km: float | None,
+# ) -> dict[str, Any] | None:
+#     """
+#     Геодезический corridor.
+
+#     Вместо shapely.buffer строим две границы полосы:
+#     - левая граница = точка трассы, смещённая на half_swath влево
+#     - правая граница = точка трассы, смещённая на half_swath вправо
+
+#     Это лучше для широких сенсоров, потому что ширина полосы задаётся
+#     как постоянное геодезическое расстояние на поверхности Земли.
+#     """
+#     if swath_km is None:
+#         return None
+
+#     swath_km_float = float(swath_km)
+
+#     if swath_km_float <= 0:
+#         return None
+
+#     if len(track_points) < 2:
+#         return None
+
+#     center_lon, _ = _get_aoi_centroid(aoi_geojson)
+#     half_swath_m = (swath_km_float * 1000.0) / 2.0
+
+#     left_edge: list[list[float]] = []
+#     right_edge: list[list[float]] = []
+
+#     for index, point in enumerate(track_points):
+#         longitude = point.get("longitude")
+#         latitude = point.get("latitude")
+
+#         if longitude is None or latitude is None:
+#             continue
+
+#         longitude = _normalize_longitude_near_center(longitude, center_lon)
+
+#         track_azimuth = _get_track_azimuth_deg(
+#             track_points=track_points,
+#             index=index,
+#             center_lon=center_lon,
+#         )
+
+#         if track_azimuth is None:
+#             continue
+
+#         left_azimuth = track_azimuth - 90.0
+#         right_azimuth = track_azimuth + 90.0
+
+#         left_edge.append(
+#             _offset_point(
+#                 longitude=longitude,
+#                 latitude=latitude,
+#                 azimuth_deg=left_azimuth,
+#                 distance_m=half_swath_m,
+#                 center_lon=center_lon,
+#             )
+#         )
+
+#         right_edge.append(
+#             _offset_point(
+#                 longitude=longitude,
+#                 latitude=latitude,
+#                 azimuth_deg=right_azimuth,
+#                 distance_m=half_swath_m,
+#                 center_lon=center_lon,
+#             )
+#         )
+
+#     if len(left_edge) < 2 or len(right_edge) < 2:
+#         return None
+
+#     polygon_ring = left_edge + list(reversed(right_edge))
+
+#     if polygon_ring[0] != polygon_ring[-1]:
+#         polygon_ring.append(polygon_ring[0])
+
+#     return {
+#         "type": "Polygon",
+#         "coordinates": [polygon_ring],
+#     }
+
+
+
+# from typing import Any
+
+# from pyproj import Geod, Transformer
+# from shapely.geometry import Point, shape
+# from shapely.ops import transform
+
+# GEOD = Geod(ellps="WGS84")
+
+
+# def _get_aoi_centroid(aoi_geojson: dict[str, Any]) -> tuple[float, float]:
+#     aoi_geometry = shape(aoi_geojson)
+#     centroid = aoi_geometry.centroid
+#     return centroid.x, centroid.y
+
+
+# def _normalize_longitude_near_center(longitude: float, center_longitude: float) -> float:
+#     normalized = longitude
+
+#     while normalized - center_longitude > 180:
+#         normalized -= 360
+
+#     while normalized - center_longitude < -180:
+#         normalized += 360
+
+#     return normalized
+
+
+# def _get_local_aeqd_transformer(aoi_geojson: dict[str, Any]) -> Transformer:
+#     center_lon, center_lat = _get_aoi_centroid(aoi_geojson)
+
+#     local_crs = (
+#         f"+proj=aeqd +lat_0={center_lat} +lon_0={center_lon} "
+#         "+datum=WGS84 +units=m +no_defs"
+#     )
+
+#     return Transformer.from_crs(
+#         "EPSG:4326",
+#         local_crs,
+#         always_xy=True,
+#     )
+
+
+# def _project_aoi(aoi_geojson: dict[str, Any], to_local: Transformer):
+#     return transform(to_local.transform, shape(aoi_geojson))
+
+
+# def _distance_km_between_points(
+#     lon1: float,
+#     lat1: float,
+#     lon2: float,
+#     lat2: float,
+# ) -> float:
+#     _, _, distance_m = GEOD.inv(lon1, lat1, lon2, lat2)
+#     return abs(distance_m) / 1000.0
+
+
+# def _get_aoi_diagonal_km(aoi_geojson: dict[str, Any]) -> float:
+#     aoi_geometry = shape(aoi_geojson)
+#     min_lon, min_lat, max_lon, max_lat = aoi_geometry.bounds
+
+#     _, _, distance_m = GEOD.inv(min_lon, min_lat, max_lon, max_lat)
+
+#     return abs(distance_m) / 1000.0
+
+
+# def _get_track_point_distance_to_aoi_m(
+#     point: dict[str, Any],
+#     projected_aoi,
+#     to_local: Transformer,
+#     center_lon: float,
+# ) -> float | None:
+#     longitude = point.get("longitude")
+#     latitude = point.get("latitude")
+
+#     if longitude is None or latitude is None:
+#         return None
+
+#     normalized_longitude = _normalize_longitude_near_center(longitude, center_lon)
+
+#     x, y = to_local.transform(normalized_longitude, latitude)
+
+#     return projected_aoi.distance(Point(x, y))
+
+
+# def select_track_segment_near_aoi(
+#     track_points: list[dict[str, Any]],
+#     aoi_geojson: dict[str, Any],
+#     swath_km: float | None = None,
+#     min_segment_km: float = 250.0,
+#     max_segment_km: float = 4500.0,
+# ) -> list[dict[str, Any]]:
+#     """
+#     Адаптивно выбирает участок трассы около AOI.
+
+#     Не берём фиксированные 2-3 точки, потому что:
+#     - для маленькой AOI это может быть слишком много;
+#     - для большой AOI это может быть слишком мало;
+#     - для широкого сенсора нужен более длинный пояс визуализации.
+#     """
+#     if len(track_points) < 2:
+#         return []
+
+#     center_lon, _ = _get_aoi_centroid(aoi_geojson)
+#     to_local = _get_local_aeqd_transformer(aoi_geojson)
+#     projected_aoi = _project_aoi(aoi_geojson, to_local)
+
+#     best_index: int | None = None
+#     best_distance_m: float | None = None
+
+#     for index, point in enumerate(track_points):
+#         distance_m = _get_track_point_distance_to_aoi_m(
+#             point=point,
+#             projected_aoi=projected_aoi,
+#             to_local=to_local,
+#             center_lon=center_lon,
+#         )
+
+#         if distance_m is None:
+#             continue
+
+#         if best_distance_m is None or distance_m < best_distance_m:
+#             best_distance_m = distance_m
+#             best_index = index
+
+#     if best_index is None:
+#         return []
+
+#     aoi_diagonal_km = _get_aoi_diagonal_km(aoi_geojson)
+
+#     swath_value_km = float(swath_km) if swath_km is not None else 0.0
+
+#     # Длина визуального сегмента:
+#     # - зависит от размера AOI;
+#     # - зависит от ширины полосы;
+#     # - но ограничена сверху, чтобы не рисовать половину орбиты.
+#     target_segment_km = max(
+#         min_segment_km,
+#         aoi_diagonal_km * 1.2,
+#         swath_value_km * 0.75,
+#     )
+
+#     target_segment_km = min(target_segment_km, max_segment_km)
+
+#     target_each_side_km = target_segment_km / 2.0
+
+#     start_index = best_index
+#     end_index = best_index
+
+#     distance_left_km = 0.0
+
+#     while start_index > 0 and distance_left_km < target_each_side_km:
+#         current = track_points[start_index]
+#         previous = track_points[start_index - 1]
+
+#         current_lon = current.get("longitude")
+#         current_lat = current.get("latitude")
+#         previous_lon = previous.get("longitude")
+#         previous_lat = previous.get("latitude")
+
+#         if None in (current_lon, current_lat, previous_lon, previous_lat):
+#             break
+
+#         distance_left_km += _distance_km_between_points(
+#             previous_lon,
+#             previous_lat,
+#             current_lon,
+#             current_lat,
+#         )
+
+#         start_index -= 1
+
+#     distance_right_km = 0.0
+
+#     while end_index < len(track_points) - 1 and distance_right_km < target_each_side_km:
+#         current = track_points[end_index]
+#         next_point = track_points[end_index + 1]
+
+#         current_lon = current.get("longitude")
+#         current_lat = current.get("latitude")
+#         next_lon = next_point.get("longitude")
+#         next_lat = next_point.get("latitude")
+
+#         if None in (current_lon, current_lat, next_lon, next_lat):
+#             break
+
+#         distance_right_km += _distance_km_between_points(
+#             current_lon,
+#             current_lat,
+#             next_lon,
+#             next_lat,
+#         )
+
+#         end_index += 1
+
+#     segment = track_points[start_index : end_index + 1]
+
+#     if len(segment) < 2:
+#         return []
+
+#     return segment
+
+
+# def build_track_line_geojson(
+#     track_points: list[dict[str, Any]],
+#     aoi_geojson: dict[str, Any] | None = None,
+# ) -> dict[str, Any] | None:
+#     if len(track_points) < 2:
+#         return None
+
+#     center_lon = None
+
+#     if aoi_geojson is not None:
+#         center_lon, _ = _get_aoi_centroid(aoi_geojson)
+
+#     coordinates: list[list[float]] = []
+
+#     for point in track_points:
+#         longitude = point.get("longitude")
+#         latitude = point.get("latitude")
+
+#         if longitude is None or latitude is None:
+#             continue
+
+#         if center_lon is not None:
+#             longitude = _normalize_longitude_near_center(longitude, center_lon)
+
+#         coordinates.append([longitude, latitude])
+
+#     if len(coordinates) < 2:
+#         return None
+
+#     return {
+#         "type": "LineString",
+#         "coordinates": coordinates,
+#     }
+
+
+# def _get_track_azimuth_deg(
+#     track_points: list[dict[str, Any]],
+#     index: int,
+#     center_lon: float,
+# ) -> float | None:
+#     """
+#     Направление движения трассы в точке.
+#     Для внутренней точки берём направление от предыдущей к следующей.
+#     Для крайних — ближайший доступный сегмент.
+#     """
+#     if len(track_points) < 2:
+#         return None
+
+#     if index == 0:
+#         point_a = track_points[0]
+#         point_b = track_points[1]
+#     elif index == len(track_points) - 1:
+#         point_a = track_points[-2]
+#         point_b = track_points[-1]
+#     else:
+#         point_a = track_points[index - 1]
+#         point_b = track_points[index + 1]
+
+#     lon_a = point_a.get("longitude")
+#     lat_a = point_a.get("latitude")
+#     lon_b = point_b.get("longitude")
+#     lat_b = point_b.get("latitude")
+
+#     if None in (lon_a, lat_a, lon_b, lat_b):
+#         return None
+
+#     lon_a = _normalize_longitude_near_center(lon_a, center_lon)
+#     lon_b = _normalize_longitude_near_center(lon_b, center_lon)
+
+#     forward_azimuth, _, _ = GEOD.inv(lon_a, lat_a, lon_b, lat_b)
+
+#     return forward_azimuth
+
+
+# def _offset_point(
+#     longitude: float,
+#     latitude: float,
+#     azimuth_deg: float,
+#     distance_m: float,
+#     center_lon: float,
+# ) -> list[float]:
+#     offset_lon, offset_lat, _ = GEOD.fwd(
+#         longitude,
+#         latitude,
+#         azimuth_deg,
+#         distance_m,
+#     )
+
+#     offset_lon = _normalize_longitude_near_center(offset_lon, center_lon)
+
+#     return [offset_lon, offset_lat]
+
+
+# def build_footprint_corridor_geojson(
+#     track_points: list[dict[str, Any]],
+#     aoi_geojson: dict[str, Any],
+#     swath_km: float | None,
+# ) -> dict[str, Any] | None:
+#     """
+#     Геодезический corridor.
+
+#     Вместо shapely.buffer строим две границы полосы:
+#     - левая граница = точка трассы, смещённая на half_swath влево
+#     - правая граница = точка трассы, смещённая на half_swath вправо
+
+#     Это лучше для широких сенсоров, потому что ширина полосы задаётся
+#     как постоянное геодезическое расстояние на поверхности Земли.
+#     """
+#     if swath_km is None:
+#         return None
+
+#     swath_km_float = float(swath_km)
+
+#     if swath_km_float <= 0:
+#         return None
+
+#     if len(track_points) < 2:
+#         return None
+
+#     center_lon, _ = _get_aoi_centroid(aoi_geojson)
+#     half_swath_m = (swath_km_float * 1000.0) / 2.0
+
+#     left_edge: list[list[float]] = []
+#     right_edge: list[list[float]] = []
+
+#     for index, point in enumerate(track_points):
+#         longitude = point.get("longitude")
+#         latitude = point.get("latitude")
+
+#         if longitude is None or latitude is None:
+#             continue
+
+#         longitude = _normalize_longitude_near_center(longitude, center_lon)
+
+#         track_azimuth = _get_track_azimuth_deg(
+#             track_points=track_points,
+#             index=index,
+#             center_lon=center_lon,
+#         )
+
+#         if track_azimuth is None:
+#             continue
+
+#         left_azimuth = track_azimuth - 90.0
+#         right_azimuth = track_azimuth + 90.0
+
+#         left_edge.append(
+#             _offset_point(
+#                 longitude=longitude,
+#                 latitude=latitude,
+#                 azimuth_deg=left_azimuth,
+#                 distance_m=half_swath_m,
+#                 center_lon=center_lon,
+#             )
+#         )
+
+#         right_edge.append(
+#             _offset_point(
+#                 longitude=longitude,
+#                 latitude=latitude,
+#                 azimuth_deg=right_azimuth,
+#                 distance_m=half_swath_m,
+#                 center_lon=center_lon,
+#             )
+#         )
+
+#     if len(left_edge) < 2 or len(right_edge) < 2:
+#         return None
+
+#     polygon_ring = left_edge + list(reversed(right_edge))
+
+#     if polygon_ring[0] != polygon_ring[-1]:
+#         polygon_ring.append(polygon_ring[0])
+
+#     return {
+#         "type": "Polygon",
+#         "coordinates": [polygon_ring],
+#     }
+
+
+
 # from typing import Any
 
 # from pyproj import Geod, Transformer

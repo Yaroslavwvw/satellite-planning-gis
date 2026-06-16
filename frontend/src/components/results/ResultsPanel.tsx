@@ -1,10 +1,13 @@
 import {
+  useEffect,
   useMemo,
+  useRef,
   useState,
   type CSSProperties,
   type Dispatch,
   type SetStateAction,
 } from 'react'
+import { fetchAggregateCoverage } from '../../api/calculations'
 import type {
   CalculationResultResponse,
   ObservationWindow,
@@ -23,9 +26,16 @@ import {
   type SpectralBandGroup,
   getAnalysisResolutionM,
   getMatchingBandLines,
+  getMatchingBandResolutionValues,
   hasUsedBands,
   isWindowSuitableByFilters,
 } from '../../utils/observationFilters'
+
+import {
+  formatAoiLocalDateTime,
+  formatUtcDateTime,
+  getAoiTimeZone,
+} from '../../utils/aoiTime'
 
 type Props = {
   result: CalculationResultResponse | null
@@ -43,7 +53,7 @@ type Props = {
   showObservationFilters?: boolean
 }
 
-type ResultTab = 'windows' | 'satellites' | 'comparison'
+type ResultTab = 'windows' | 'satellites'
 
 type SatelliteSummary = {
   satellite_id: number
@@ -85,6 +95,32 @@ function formatResolution(value: number | null | undefined) {
   return `${value} м`
 }
 
+
+
+function formatResolutionRange(values: number[]) {
+  if (values.length === 0) {
+    return '—'
+  }
+
+  const minResolution = Math.min(...values)
+  const maxResolution = Math.max(...values)
+
+  if (Math.abs(minResolution - maxResolution) < 0.01) {
+    return formatResolution(minResolution)
+  }
+
+  return `${formatResolution(minResolution)} — ${formatResolution(maxResolution)}`
+}
+
+function getWindowResolutionRange(
+  filters: ObservationFilters,
+  sensor: Sensor | undefined,
+) {
+  return formatResolutionRange(
+    getMatchingBandResolutionValues(filters, sensor),
+  )
+}
+
 function formatKm(value: number | null | undefined) {
   if (value == null) {
     return '—'
@@ -99,6 +135,25 @@ function formatAngle(value: number | null | undefined) {
   }
 
   return `${value.toFixed(1)}°`
+}
+
+const formatAngleRange = (
+  minAngle: number | null | undefined,
+  maxAngle: number | null | undefined,
+) => {
+  if (minAngle == null && maxAngle == null) {
+    return '—'
+  }
+
+  if (minAngle == null) {
+    return `до ${formatAngle(maxAngle)}`
+  }
+
+  if (maxAngle == null || Math.abs(minAngle - maxAngle) < 0.01) {
+    return formatAngle(minAngle)
+  }
+
+  return `от ${formatAngle(minAngle)} до ${formatAngle(maxAngle)}`
 }
 
 function getSensorModeLabel(sensorModeName: string | null | undefined) {
@@ -133,7 +188,7 @@ function buildCsv(
 
   const rows = windows.map((item) => {
     const sensor = sensorById.get(item.sensor_id)
-    const resolution = getAnalysisResolutionM(filters, sensor)
+    const resolutionRange = getWindowResolutionRange(filters, sensor)
 
     return [
       item.satellite_name,
@@ -152,7 +207,7 @@ function buildCsv(
         ? String(item.required_off_nadir_deg)
         : '',
       item.max_off_nadir_deg != null ? String(item.max_off_nadir_deg) : '',
-      resolution != null ? String(resolution) : '',
+      resolutionRange,
       ...(showUsedBands ? [getMatchingBandLines(filters, sensor).join(' | ')] : []),
     ]
   })
@@ -162,6 +217,47 @@ function buildCsv(
       row.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(';'),
     )
     .join('\n')
+}
+
+type ResultPanelFilters = {
+  satelliteFilter: string
+  sensorModeFilter: string
+  searchQuery: string
+  activeTab?: ResultTab
+}
+
+function getResultPanelFiltersKey(calculationRunId: number) {
+  return `satellitePlanning.resultPanelFilters.${calculationRunId}`
+}
+
+function getSavedResultTab(value: ResultTab | 'comparison' | undefined): ResultTab {
+  if (value === 'satellites') {
+    return 'satellites'
+  }
+
+  return 'windows'
+}
+
+function readSavedResultPanelFilters(
+  calculationRunId: number,
+): ResultPanelFilters | null {
+  try {
+    const raw = localStorage.getItem(getResultPanelFiltersKey(calculationRunId))
+
+    return raw ? (JSON.parse(raw) as ResultPanelFilters) : null
+  } catch {
+    return null
+  }
+}
+
+function saveResultPanelFilters(
+  calculationRunId: number,
+  filters: ResultPanelFilters,
+) {
+  localStorage.setItem(
+    getResultPanelFiltersKey(calculationRunId),
+    JSON.stringify(filters),
+  )
 }
 
 export default function ResultsPanel({
@@ -179,19 +275,79 @@ export default function ResultsPanel({
   onObservationFiltersChange,
   showObservationFilters = true,
 }: Props) {
+  
   const [activeTab, setActiveTab] = useState<ResultTab>('windows')
   const [satelliteFilter, setSatelliteFilter] = useState('all')
   const [sensorModeFilter, setSensorModeFilter] = useState('all')
   const [searchQuery, setSearchQuery] = useState('')
+  const isRestoringResultPanelFiltersRef = useRef(false)
+  const [aggregateCoverage, setAggregateCoverage] = useState<number | null>(null)
+  const [isAggregateCoverageLoading, setIsAggregateCoverageLoading] = useState(false)
   const [localFilters, setLocalFilters] = useState<ObservationFilters>(
     DEFAULT_OBSERVATION_FILTERS,
   )
 
-  const filters = observationFilters ?? localFilters
-  const setFilters = onObservationFiltersChange ?? setLocalFilters
+  
+  // const filters = observationFilters ?? localFilters
+  // const setFilters = onObservationFiltersChange ?? setLocalFilters
+
+  
+
+  const resetResultFilters = () => {
+  setSatelliteFilter('all')
+  setSensorModeFilter('all')
+  setSearchQuery('')
+  setFilters(DEFAULT_OBSERVATION_FILTERS)
+}
 
   const allWindows = result?.windows ?? []
 
+  const calculationRunId = result?.calculation_run.calculation_run_id
+
+  const filters = observationFilters ?? localFilters
+  const setFilters = onObservationFiltersChange ?? setLocalFilters
+
+  useEffect(() => {
+    if (!calculationRunId) {
+      isRestoringResultPanelFiltersRef.current = true
+      setSatelliteFilter('all')
+      setSensorModeFilter('all')
+      setSearchQuery('')
+      setActiveTab('windows')
+      return
+    }
+
+    const savedFilters = readSavedResultPanelFilters(calculationRunId)
+
+    isRestoringResultPanelFiltersRef.current = true
+    setSatelliteFilter(savedFilters?.satelliteFilter ?? 'all')
+    setSensorModeFilter(savedFilters?.sensorModeFilter ?? 'all')
+    setSearchQuery(savedFilters?.searchQuery ?? '')
+    setActiveTab(getSavedResultTab(savedFilters?.activeTab))
+  }, [calculationRunId])
+
+  useEffect(() => {
+    if (isRestoringResultPanelFiltersRef.current) {
+      isRestoringResultPanelFiltersRef.current = false
+      return
+    }
+
+    if (!calculationRunId) {
+      return
+    }
+
+    saveResultPanelFilters(calculationRunId, {
+      satelliteFilter,
+      sensorModeFilter,
+      searchQuery,
+      activeTab,
+    })
+  }, [calculationRunId, satelliteFilter, sensorModeFilter, searchQuery, activeTab])
+
+  const aoiTimeZone = useMemo(
+    () => getAoiTimeZone(result?.aoi?.geometry),
+    [result?.aoi?.geometry],
+  )
   const satelliteById = useMemo(() => {
     return new Map(satellites.map((satellite) => [satellite.satellite_id, satellite]))
   }, [satellites])
@@ -258,10 +414,61 @@ export default function ResultsPanel({
     })
   }, [observationFilteredWindows, satelliteFilter, sensorModeFilter, searchQuery])
 
-  const availableSatellites = new Set(allWindows.map((item) => item.satellite_id)).size
-  const nearestWindow = allWindows[0]
+  const filteredWindowIds = useMemo(
+    () => filteredWindows.map((item) => item.window_id),
+    [filteredWindows],
+  )
 
-  const windowsWithCoverage = allWindows.filter(
+  const filteredWindowIdsKey = filteredWindowIds.join(',')
+
+  useEffect(() => {
+    const calculationRunId = result?.calculation_run.calculation_run_id
+
+    if (!calculationRunId || filteredWindowIds.length === 0) {
+      setAggregateCoverage(null)
+      setIsAggregateCoverageLoading(false)
+      return
+    }
+
+    let isCancelled = false
+
+    setIsAggregateCoverageLoading(true)
+
+    fetchAggregateCoverage(calculationRunId, filteredWindowIds)
+      .then((data) => {
+        if (!isCancelled) {
+          setAggregateCoverage(data.coverage_percent)
+        }
+      })
+      .catch(() => {
+        if (!isCancelled) {
+          setAggregateCoverage(null)
+        }
+      })
+      .finally(() => {
+        if (!isCancelled) {
+          setIsAggregateCoverageLoading(false)
+        }
+      })
+
+    return () => {
+      isCancelled = true
+    }
+  }, [result?.calculation_run.calculation_run_id, filteredWindowIdsKey])
+
+
+
+  const availableSatellites = new Set(
+    filteredWindows.map((item) => item.satellite_id),
+  ).size
+
+  const nearestWindow = [...filteredWindows].sort(
+    (left, right) =>
+      new Date(left.access_start).getTime() -
+      new Date(right.access_start).getTime(),
+  )[0]
+
+  const windowsWithCoverage = filteredWindows.filter(
     (item) => item.coverage_percent !== null && item.coverage_percent !== undefined,
   )
 
@@ -289,7 +496,7 @@ export default function ResultsPanel({
       }
     >()
 
-    for (const item of observationFilteredWindows) {
+    for (const item of filteredWindows) {
       const existing = map.get(item.satellite_id)
       const hasCoverage =
         item.coverage_percent !== null && item.coverage_percent !== undefined
@@ -333,7 +540,7 @@ export default function ResultsPanel({
           ? `${(item.avg_coverage_sum / item.avg_coverage_count).toFixed(1)}%`
           : '—',
     }))
-  }, [observationFilteredWindows])
+  }, [filteredWindows])
 
   function copyResultLink() {
     if (!result) return
@@ -425,13 +632,13 @@ export default function ResultsPanel({
                 <KpiCard
                   title="Доступных спутников"
                   value={availableSatellites.toString()}
-                  subtitle="из каталога"
+                  subtitle="с учётом фильтров"
                 />
 
                 <KpiCard
                   title="Окон наблюдения"
-                  value={allWindows.length.toString()}
-                  subtitle="за период анализа"
+                  value={filteredWindows.length.toString()}
+                  subtitle="с учётом фильтров"
                 />
 
                 <KpiCard
@@ -443,7 +650,19 @@ export default function ResultsPanel({
                 <KpiCard
                   title="Среднее покрытие"
                   value={averageCoverage !== '—' ? `${averageCoverage}%` : '—'}
-                  subtitle="по найденным окнам"
+                  subtitle="по видимым окнам"
+                />
+
+                <KpiCard
+                  title="Покрыто за период"
+                  value={
+                    isAggregateCoverageLoading
+                      ? '...'
+                      : aggregateCoverage !== null
+                        ? `${aggregateCoverage.toFixed(1)}%`
+                        : '—'
+                  }
+                  subtitle="всеми видимыми окнами"
                 />
               </div>
 
@@ -465,13 +684,13 @@ export default function ResultsPanel({
                     Спутники
                   </button>
 
-                  <button
+                  {/* <button
                     type="button"
                     className={activeTab === 'comparison' ? 'active' : ''}
                     onClick={() => setActiveTab('comparison')}
                   >
                     Сравнение
-                  </button>
+                  </button> */}
                 </div>
 
                 <div className="result-filters">
@@ -488,6 +707,7 @@ export default function ResultsPanel({
                   </select>
 
                   <select
+                    className="results-filter-select--mode"
                     value={sensorModeFilter}
                     onChange={(event) => setSensorModeFilter(event.target.value)}
                   >
@@ -498,6 +718,14 @@ export default function ResultsPanel({
                       </option>
                     ))}
                   </select>
+
+                  <button
+                    type="button"
+                    className="results-filter-reset-button"
+                    onClick={resetResultFilters}
+                  >
+                    Сбросить фильтры
+                  </button>
 
                   <input
                     value={searchQuery}
@@ -524,6 +752,8 @@ export default function ResultsPanel({
                     sensorById={sensorById}
                     filters={filters}
                     onToggleWindowLayer={onToggleWindowLayer}
+                    aoiTimeZone={aoiTimeZone}
+                    setFilters={setFilters}
                   />
                 </>
               )}
@@ -532,9 +762,9 @@ export default function ResultsPanel({
                 <SatelliteSummaryTable satellites={satelliteSummaries} />
               )}
 
-              {activeTab === 'comparison' && (
+              {/* {activeTab === 'comparison' && (
                 <ComparisonTable satellites={satelliteSummaries} />
-              )}
+              )} */}
             </>
           )}
         </>
@@ -588,6 +818,23 @@ function ObservationFiltersPanel({
                 {label}
               </option>
             ))}
+          </select>
+        </label>
+
+        <label className="results-filter-field">
+          <span>Освещённость</span>
+          <select
+            value={filters.illumination}
+            onChange={(event) =>
+              onChange((current) => ({
+                ...current,
+                illumination: event.target.value as ObservationFilters['illumination'],
+              }))
+            }
+          >
+            <option value="all">Все окна</option>
+            <option value="day">Только дневные</option>
+            <option value="night">Только ночные</option>
           </select>
         </label>
 
@@ -722,12 +969,16 @@ function ObservationWindowsTable({
   selectedWindowIds,
   sensorById,
   filters,
+  setFilters,
+  aoiTimeZone,
   onToggleWindowLayer,
 }: {
   windows: ObservationWindow[]
   selectedWindowIds: number[]
   sensorById: Map<number, Sensor>
   filters: ObservationFilters
+  setFilters: Dispatch<SetStateAction<ObservationFilters>>
+  aoiTimeZone: string
   onToggleWindowLayer?: (windowId: number) => void
 }) {
   const showUsedBands = hasUsedBands(filters)
@@ -768,7 +1019,7 @@ function ObservationWindowsTable({
             <th>Конец окна</th>
             <th>Длит.</th>
             <th>Покрытие AOI</th>
-            <th>Разрешение анализа</th>
+            <th>Разрешение</th>
             {showUsedBands && <th>Используемые каналы</th>}
           </tr>
         </thead>
@@ -778,7 +1029,7 @@ function ObservationWindowsTable({
             const satelliteColor = getSatelliteColor(item.satellite_id)
             const isActive = selectedWindowIds.includes(item.window_id)
             const sensor = sensorById.get(item.sensor_id)
-            const analysisResolution = getAnalysisResolutionM(filters, sensor)
+            const resolutionRange = getWindowResolutionRange(filters, sensor)
             const matchingBandLines = getMatchingBandLines(filters, sensor)
 
             return (
@@ -818,8 +1069,32 @@ function ObservationWindowsTable({
                   </div>
                 </td>
 
-                <td>{formatDateTime(item.access_start)}</td>
-                <td>{formatDateTime(item.access_end)}</td>
+                <td>
+                  <div className="result-time-block">
+                    <div>
+                      <span className="result-time-label">UTC:</span>{' '}
+                      {formatUtcDateTime(item.access_start)}
+                    </div>
+                    <div className="result-time-local">
+                      <span className="result-time-label">Местн:</span>{' '}
+                      {formatAoiLocalDateTime(item.access_start, aoiTimeZone)}
+                    </div>
+                  </div>
+                </td>
+
+                <td>
+                  <div className="result-time-block">
+                    <div>
+                      <span className="result-time-label">UTC:</span>{' '}
+                      {formatUtcDateTime(item.access_end)}
+                    </div>
+                    <div className="result-time-local">
+                      <span className="result-time-label">Местн:</span>{' '}
+                      {formatAoiLocalDateTime(item.access_end, aoiTimeZone)}
+                    </div>
+                  </div>
+                </td>
+
                 <td>{formatDuration(item.duration_sec)}</td>
 
                 <td>
@@ -828,20 +1103,47 @@ function ObservationWindowsTable({
                       {formatCoverage(item.coverage_percent)}
                     </div>
 
-                    {item.requires_pointing &&
+                    {item.sar_min_look_angle_deg != null &&
+                      item.sar_max_look_angle_deg != null &&
                       item.reachable_coverage_percent != null && (
                         <div className="result-coverage-pointing">
-                          доступно при наведении:{' '}
-                          {formatCoverage(item.reachable_coverage_percent)}
+                          покрытие SAR-зоной: {formatCoverage(item.reachable_coverage_percent)}
                         </div>
                       )}
 
-                    {item.requires_pointing && (
+                    {item.sar_min_look_angle_deg == null &&
+                      item.requires_pointing &&
+                      item.reachable_coverage_percent != null && (
+                        <div className="result-coverage-pointing">
+                          доступно при наведении: {formatCoverage(item.reachable_coverage_percent)}
+                        </div>
+                      )}
+
+                    {item.sar_min_look_angle_deg != null &&
+                      item.sar_max_look_angle_deg != null && (
+                        <div
+                          className="result-pointing-badge"
+                          title={`SAR-зона обзора: ${formatAngle(
+                            item.sar_min_look_angle_deg,
+                          )}–${formatAngle(item.sar_max_look_angle_deg)}, сторона: ${
+                            item.sar_look_direction === 'left'
+                              ? 'левая'
+                              : item.sar_look_direction === 'right'
+                                ? 'правая'
+                                : 'обе'
+                          }`}
+                        >
+                          SAR-обзор
+                        </div>
+                      )}
+
+                    {item.sar_min_look_angle_deg == null && item.requires_pointing && (
                       <div
                         className="result-pointing-badge"
-                        title={`AOI находится в зоне возможного наведения. Требуемый угол: ${formatAngle(
+                        title={`AOI находится в зоне возможного наведения. Требуемый угол: ${formatAngleRange(
                           item.required_off_nadir_deg,
-                        )}, максимум режима: ${formatAngle(item.max_off_nadir_deg)}`}
+                          item.required_off_nadir_max_deg,
+                        )}, максимум сценария: ${formatAngle(item.max_off_nadir_deg)}`}
                       >
                         требуется наведение
                       </div>
@@ -849,7 +1151,7 @@ function ObservationWindowsTable({
                   </div>
                 </td>
 
-                <td>{formatResolution(analysisResolution)}</td>
+                <td>{resolutionRange}</td>
 
                 {showUsedBands && (
                   <td className="used-bands-cell">
