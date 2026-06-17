@@ -29,6 +29,7 @@ from app.services.map_layers_service import (
     build_footprint_corridor_geojson,
     build_reachable_footprint_corridor_geojson,
     build_sar_footprint_corridor_geojson,
+    build_sar_mode_footprint_corridor_geojson,
     build_track_line_geojson,
     calculate_footprint_coverage_details,
     select_track_segment_near_aoi,
@@ -69,9 +70,15 @@ class AggregateCoverageResponse(BaseModel):
 def get_sensor_modes_for_calculation(sensor: Sensor) -> list[SensorMode | None]:
     modes = getattr(sensor, "modes", None) or []
 
-    if modes:
+    active_modes = [
+        mode
+        for mode in modes
+        if getattr(mode, "is_active", True)
+    ]
+
+    if active_modes:
         return sorted(
-            modes,
+            active_modes,
             key=lambda mode: (
                 not mode.is_default,
                 mode.sensor_mode_id,
@@ -376,6 +383,61 @@ def build_sar_window_footprint_layer(
         geometry=sar_geometry,
     )
 
+def build_sar_mode_window_footprint_layer(
+    satellite: Satellite,
+    sensor: Sensor,
+    tle_record: TLERecord,
+    aoi_geometry: dict,
+    access_start: datetime,
+    access_end: datetime,
+    swath_km: float | None,
+    sar_min_look_angle_deg: float | None,
+    sar_max_look_angle_deg: float | None,
+    sar_look_direction: str | None,
+):
+    segment_start = access_start - timedelta(minutes=WINDOW_LAYER_PADDING_MINUTES)
+    segment_end = access_end + timedelta(minutes=WINDOW_LAYER_PADDING_MINUTES)
+
+    track_points = generate_satellite_track(
+        satellite_name=satellite.name,
+        line1=tle_record.line1,
+        line2=tle_record.line2,
+        start_time=segment_start,
+        end_time=segment_end,
+        step_seconds=WINDOW_LAYER_STEP_SECONDS,
+    )
+
+    local_track_points = select_track_segment_near_aoi(
+        track_points=track_points,
+        aoi_geojson=aoi_geometry,
+        points_before=WINDOW_LAYER_POINTS_PADDING,
+        points_after=WINDOW_LAYER_POINTS_PADDING,
+    )
+
+    if len(local_track_points) < 2:
+        return None
+
+    sar_mode_geometry = build_sar_mode_footprint_corridor_geojson(
+        track_points=local_track_points,
+        aoi_geojson=aoi_geometry,
+        sar_min_look_angle_deg=sar_min_look_angle_deg,
+        sar_max_look_angle_deg=sar_max_look_angle_deg,
+        swath_km=swath_km,
+        sar_look_direction=sar_look_direction,
+    )
+
+    if sar_mode_geometry is None:
+        return None
+
+    return FootprintLayerRead(
+        satellite_id=satellite.satellite_id,
+        satellite_name=satellite.name,
+        sensor_id=sensor.sensor_id,
+        sensor_name=f"{sensor.name} — SAR-полоса режима",
+        swath_km=float(swath_km) if swath_km is not None else None,
+        geometry=sar_mode_geometry,
+    )
+
 def build_window_coverage_geometry(
     window: ObservationWindow,
     satellite: Satellite,
@@ -386,19 +448,20 @@ def build_window_coverage_geometry(
     window_swath_km = get_window_swath_km(window, sensor)
 
     if window.sar_min_look_angle_deg is not None:
-        sar_layer = build_sar_window_footprint_layer(
+        sar_mode_layer = build_sar_mode_window_footprint_layer(
             satellite=satellite,
             sensor=sensor,
             tle_record=tle_record,
             aoi_geometry=aoi_geometry,
             access_start=window.access_start,
             access_end=window.access_end,
+            swath_km=window_swath_km,
             sar_min_look_angle_deg=window.sar_min_look_angle_deg,
             sar_max_look_angle_deg=window.sar_max_look_angle_deg,
             sar_look_direction=window.sar_look_direction,
         )
 
-        return sar_layer.geometry if sar_layer is not None else None
+        return sar_mode_layer.geometry if sar_mode_layer is not None else None
 
     if window.requires_pointing:
         reachable_layer = build_reachable_window_footprint_layer(
@@ -624,7 +687,23 @@ def create_calculation(payload: CalculationCreate, db: Session = Depends(get_db)
                         continue
 
                     if is_sar_sensor(sensor):
-                        coverage_percent = None
+                        sar_mode_layer = build_sar_mode_window_footprint_layer(
+                            satellite=satellite,
+                            sensor=sensor,
+                            tle_record=current_tle,
+                            aoi_geometry=aoi_geometry,
+                            access_start=detected_window.access_start,
+                            access_end=detected_window.access_end,
+                            swath_km=mode_swath_km,
+                            sar_min_look_angle_deg=detected_window.sar_min_look_angle_deg,
+                            sar_max_look_angle_deg=detected_window.sar_max_look_angle_deg,
+                            sar_look_direction=detected_window.sar_look_direction,
+                        )
+
+                        coverage_percent = calculate_layer_coverage_percent(
+                            aoi_geometry=aoi_geometry,
+                            footprint_layer=sar_mode_layer,
+                        )
 
                         sar_layer = build_sar_window_footprint_layer(
                             satellite=satellite,
@@ -681,11 +760,14 @@ def create_calculation(payload: CalculationCreate, db: Session = Depends(get_db)
                                 reachable_coverage_percent = layer_reachable_coverage_percent
 
 
-                    coverage_for_filter = (
-                        reachable_coverage_percent
-                        if detected_window.requires_pointing
-                        else coverage_percent
-                    )
+                    if is_sar_sensor(sensor):
+                        coverage_for_filter = coverage_percent
+                    else:
+                        coverage_for_filter = (
+                            reachable_coverage_percent
+                            if detected_window.requires_pointing
+                            else coverage_percent
+                        )
 
                     if (
                         coverage_for_filter is None
@@ -1014,11 +1096,24 @@ def get_window_map_layer(
     reachable_footprint = None
 
     if window.sar_min_look_angle_deg is not None:
-        footprint = None
+        footprint = build_sar_mode_window_footprint_layer(
+            satellite=satellite,
+            sensor=sensor,
+            tle_record=tle_record,
+            aoi_geometry=aoi_geometry,
+            access_start=window.access_start,
+            access_end=window.access_end,
+            swath_km=window_swath_km,
+            sar_min_look_angle_deg=window.sar_min_look_angle_deg,
+            sar_max_look_angle_deg=window.sar_max_look_angle_deg,
+            sar_look_direction=window.sar_look_direction,
+        )
+
         coverage_details = calculate_footprint_coverage_details(
             aoi_geojson=aoi_geometry,
-            footprint_geojson=None,
+            footprint_geojson=footprint.geometry if footprint is not None else None,
         )
+
         reachable_footprint = build_sar_window_footprint_layer(
             satellite=satellite,
             sensor=sensor,

@@ -37,6 +37,10 @@ import {
   getAoiTimeZone,
 } from '../../utils/aoiTime'
 
+import {
+  getSarModeCalculationResolutionM,
+} from '../../utils/sarModeDisplay'
+
 type Props = {
   result: CalculationResultResponse | null
   message: string
@@ -121,6 +125,20 @@ function getWindowResolutionRange(
   )
 }
 
+function getWindowResultResolutionLabel(
+  item: ObservationWindow,
+  filters: ObservationFilters,
+  sensor: Sensor | undefined,
+) {
+  const sarResolution = getSarModeCalculationResolutionM(item.sensor_mode_name)
+
+  if (sarResolution !== null) {
+    return formatResolution(sarResolution)
+  }
+
+  return getWindowResolutionRange(filters, sensor)
+}
+
 function formatKm(value: number | null | undefined) {
   if (value == null) {
     return '—'
@@ -159,7 +177,21 @@ const formatAngleRange = (
 function getSensorModeLabel(sensorModeName: string | null | undefined) {
   const normalizedName = sensorModeName?.trim()
 
-  return normalizedName || 'Стандартный режим'
+  return normalizedName || 'Маршрутный'
+}
+
+function getWindowCalculationResolutionM(
+  item: ObservationWindow,
+  filters: ObservationFilters,
+  sensor: Sensor | undefined,
+) {
+  const sarResolution = getSarModeCalculationResolutionM(item.sensor_mode_name)
+
+  if (sarResolution !== null) {
+    return sarResolution
+  }
+
+  return getAnalysisResolutionM(filters, sensor)
 }
 
 function buildCsv(
@@ -397,6 +429,10 @@ export default function ResultsPanel({
 
     return observationFilteredWindows.filter((item) => {
       const itemModeName = getSensorModeLabel(item.sensor_mode_name)
+
+      if (sensorModeFilter !== 'all' && itemModeName !== sensorModeFilter) {
+        return false
+      }
 
       const matchesSatellite =
         satelliteFilter === 'all' || item.satellite_name === satelliteFilter
@@ -712,9 +748,10 @@ export default function ResultsPanel({
                     onChange={(event) => setSensorModeFilter(event.target.value)}
                   >
                     <option value="all">Все режимы</option>
+
                     {sensorModeOptions.map((modeName) => (
                       <option key={modeName} value={modeName}>
-                        {modeName}
+                        {getSensorModeLabel(modeName)}
                       </option>
                     ))}
                   </select>
@@ -1029,7 +1066,7 @@ function ObservationWindowsTable({
             const satelliteColor = getSatelliteColor(item.satellite_id)
             const isActive = selectedWindowIds.includes(item.window_id)
             const sensor = sensorById.get(item.sensor_id)
-            const resolutionRange = getWindowResolutionRange(filters, sensor)
+            const resultResolution = getWindowResultResolutionLabel(item, filters, sensor)
             const matchingBandLines = getMatchingBandLines(filters, sensor)
 
             return (
@@ -1151,7 +1188,7 @@ function ObservationWindowsTable({
                   </div>
                 </td>
 
-                <td>{resolutionRange}</td>
+                <td>{resultResolution}</td>
 
                 {showUsedBands && (
                   <td className="used-bands-cell">

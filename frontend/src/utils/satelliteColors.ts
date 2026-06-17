@@ -5,7 +5,7 @@ const SATELLITE_COLORS = [
   '#7c3aed',
   '#d64545',
   '#0f766e',
-  '#ca8a04',
+  '#ff6b00',
   '#2563eb',
   '#be185d',
   '#0891b2',

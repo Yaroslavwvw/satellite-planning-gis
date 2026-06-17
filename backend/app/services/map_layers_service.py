@@ -85,6 +85,34 @@ def _convert_web_mercator_geojson_to_lonlat(geometry: dict[str, Any]) -> dict[st
     }
 
 
+def _convert_lonlat_geojson_to_web_mercator(
+    geometry: dict[str, Any],
+    center_longitude: float,
+) -> dict[str, Any]:
+    def convert_coordinates(coords):
+        if not coords:
+            return coords
+
+        if isinstance(coords[0], (int, float)):
+            longitude = _normalize_longitude_near_center(
+                float(coords[0]),
+                center_longitude,
+            )
+            latitude = float(coords[1])
+            x, y = _lonlat_to_web_mercator(longitude, latitude)
+            return [x, y]
+
+        return [convert_coordinates(item) for item in coords]
+
+    return {
+        **geometry,
+        "coordinates": convert_coordinates(geometry["coordinates"]),
+    }
+
+
+def _clamp(value: float, minimum: float, maximum: float) -> float:
+    return max(minimum, min(maximum, value))
+
 def _polygon_like_to_geojson(geometry) -> dict[str, Any] | None:
     if geometry.is_empty:
         return None
@@ -570,6 +598,184 @@ def build_sar_footprint_corridor_geojson(
         return None
 
     return _convert_web_mercator_geojson_to_lonlat(sar_zone_geojson_web_mercator)
+
+def build_sar_mode_footprint_corridor_geojson(
+    track_points: list[dict[str, Any]],
+    aoi_geojson: dict[str, Any],
+    sar_min_look_angle_deg: float | None,
+    sar_max_look_angle_deg: float | None,
+    swath_km: float | None,
+    sar_look_direction: str | None = "both",
+) -> dict[str, Any] | None:
+    """
+    Строит сплошную SAR-полосу конкретного режима внутри SAR-зоны доступности.
+
+    Пунктирная SAR-зона 22–55° показывает, куда радар может смотреть.
+    Эта функция строит уже конкретную полосу режима и размещает её так,
+    чтобы максимально покрыть AOI.
+    """
+    if len(track_points) < 2:
+        return None
+
+    if sar_min_look_angle_deg is None or sar_max_look_angle_deg is None:
+        return None
+
+    if swath_km is None:
+        return None
+
+    sar_min_look_angle = float(sar_min_look_angle_deg)
+    sar_max_look_angle = float(sar_max_look_angle_deg)
+    mode_swath_km = float(swath_km)
+
+    if sar_min_look_angle <= 0:
+        return None
+
+    if sar_max_look_angle <= sar_min_look_angle:
+        return None
+
+    if sar_max_look_angle >= 90:
+        return None
+
+    if mode_swath_km <= 0:
+        return None
+
+    average_altitude_km = _get_average_altitude_km(track_points)
+
+    if average_altitude_km is None:
+        return None
+
+    near_range_km = _calculate_ground_range_km(
+        altitude_km=average_altitude_km,
+        look_angle_deg=sar_min_look_angle,
+    )
+    far_range_km = _calculate_ground_range_km(
+        altitude_km=average_altitude_km,
+        look_angle_deg=sar_max_look_angle,
+    )
+
+    if near_range_km is None or far_range_km is None:
+        return None
+
+    if far_range_km <= near_range_km:
+        return None
+
+    center_lon, center_lat = _get_aoi_centroid(aoi_geojson)
+
+    web_mercator_coordinates: list[tuple[float, float]] = []
+
+    for point in track_points:
+        longitude = point.get("longitude")
+        latitude = point.get("latitude")
+
+        if longitude is None or latitude is None:
+            continue
+
+        normalized_longitude = _normalize_longitude_near_center(
+            longitude,
+            center_lon,
+        )
+
+        web_mercator_coordinates.append(
+            _lonlat_to_web_mercator(normalized_longitude, latitude)
+        )
+
+    if len(web_mercator_coordinates) < 2:
+        return None
+
+    line_web_mercator = LineString(web_mercator_coordinates)
+
+    latitude_scale = max(math.cos(math.radians(center_lat)), 0.15)
+
+    visual_near_range_m = near_range_km * 1000.0 / latitude_scale
+    visual_far_range_m = far_range_km * 1000.0 / latitude_scale
+    visual_mode_width_m = mode_swath_km * 1000.0 / latitude_scale
+
+    available_width_m = visual_far_range_m - visual_near_range_m
+
+    if available_width_m <= 0:
+        return None
+
+    mode_width_m = min(visual_mode_width_m, available_width_m)
+
+    if mode_width_m <= 0:
+        return None
+
+    max_start_range_m = visual_far_range_m - mode_width_m
+
+    aoi_web_mercator = shape(
+        _convert_lonlat_geojson_to_web_mercator(aoi_geojson, center_lon)
+    )
+    aoi_web_mercator = _make_geometry_valid(aoi_web_mercator)
+
+    if aoi_web_mercator.is_empty:
+        return None
+
+    centroid_distance_m = line_web_mercator.distance(aoi_web_mercator.centroid)
+
+    centroid_start_m = _clamp(
+        centroid_distance_m - mode_width_m / 2.0,
+        visual_near_range_m,
+        max_start_range_m,
+    )
+
+    candidate_start_ranges = {
+        visual_near_range_m,
+        max_start_range_m,
+        centroid_start_m,
+    }
+
+    sample_count = 24
+    step_m = (max_start_range_m - visual_near_range_m) / sample_count
+
+    for index in range(sample_count + 1):
+        candidate_start_ranges.add(visual_near_range_m + step_m * index)
+
+    look_direction = _normalize_sar_look_direction(sar_look_direction)
+
+    candidate_sides = []
+
+    if look_direction in {"left", "both"}:
+        candidate_sides.append("left")
+
+    if look_direction in {"right", "both"}:
+        candidate_sides.append("right")
+
+    best_geometry = None
+    best_intersection_area = -1.0
+
+    for side in candidate_sides:
+        for start_range_m in sorted(candidate_start_ranges):
+            candidate_geometry = _build_sar_side_band_web_mercator(
+                line_web_mercator=line_web_mercator,
+                near_range_m=start_range_m,
+                far_range_m=start_range_m + mode_width_m,
+                side=side,
+            )
+
+            if candidate_geometry is None or candidate_geometry.is_empty:
+                continue
+
+            intersection = candidate_geometry.intersection(aoi_web_mercator)
+            intersection_area = 0.0 if intersection.is_empty else intersection.area
+
+            if intersection_area > best_intersection_area:
+                best_intersection_area = intersection_area
+                best_geometry = candidate_geometry
+
+    if best_geometry is None or best_geometry.is_empty:
+        return None
+
+    best_geometry = best_geometry.simplify(
+        500,
+        preserve_topology=True,
+    )
+
+    sar_mode_geojson_web_mercator = _polygon_like_to_geojson(best_geometry)
+
+    if sar_mode_geojson_web_mercator is None:
+        return None
+
+    return _convert_web_mercator_geojson_to_lonlat(sar_mode_geojson_web_mercator)
 
 def _normalize_geojson_longitudes(
     geometry: dict[str, Any],

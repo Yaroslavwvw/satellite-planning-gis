@@ -21,6 +21,7 @@ class SensorMode(Base):
     max_off_nadir_deg: Mapped[float | None] = mapped_column(Float, nullable=True)
 
     is_default: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     sar_min_look_angle_deg: Mapped[float | None] = mapped_column(Float, nullable=True)

@@ -218,8 +218,9 @@ export default function SatellitesPage() {
                   {sensors.map((sensor) => {
                     const detailedBands = getDetailedBands(sensor)
                     const bestResolution = getBestResolution(detailedBands)
+                    const activeModes = getActiveModes(sensor)
                     const defaultMode =
-                      sensor.modes?.find((mode) => mode.is_default) ?? sensor.modes?.[0] ?? null
+                      activeModes.find((mode) => mode.is_default) ?? activeModes[0] ?? null
 
                     return (
                       <div key={sensor.sensor_id} className="sensor-card">
@@ -231,25 +232,27 @@ export default function SatellitesPage() {
                         <div className="sensor-card-body">
                           <div>
                             <span>Полоса захвата</span>
-                            <strong>
+                            <strong>{getSensorSwathDisplay(sensor, defaultMode)}</strong>
+                            {/* <strong>
                               {defaultMode?.swath_km !== null && defaultMode?.swath_km !== undefined
                                 ? `${defaultMode.swath_km} км`
                                 : sensor.swath_km !== null
                                   ? `${sensor.swath_km} км`
                                   : '—'}
-                            </strong>
+                            </strong> */}
                           </div>
 
                           <div>
                             <span>Лучшее разрешение</span>
-                            <strong>
+                            <strong>{getSensorBestResolutionDisplay(sensor, bestResolution)}</strong>
+                            {/* <strong>
                               {defaultMode?.spatial_resolution_m !== null &&
                               defaultMode?.spatial_resolution_m !== undefined
                                 ? `${defaultMode.spatial_resolution_m} м`
                                 : bestResolution !== null
                                   ? `${bestResolution} м`
                                   : '—'}
-                            </strong>
+                            </strong> */}
                           </div>
 
                           <div>
@@ -257,17 +260,17 @@ export default function SatellitesPage() {
                             <strong>{detailedBands.length}</strong>
                           </div>
 
-                          <div>
+                          {/* <div>
                             <span>Макс. угол отклонения</span>
                             <strong>{formatOffNadir(defaultMode?.max_off_nadir_deg ?? null)}</strong>
-                          </div>
+                          </div> */}
                         </div>
 
-                        {sensor.modes && sensor.modes.length > 0 && (
+                        {activeModes.length > 0 && (
                           <div className="sensor-modes-list">
                             <div className="sensor-modes-title">Режимы съёмки</div>
 
-                            {sensor.modes.map((mode) => (
+                            {activeModes.map((mode) => (
                               <div key={mode.sensor_mode_id} className="sensor-mode-row">
                                 <strong>{mode.mode_name}</strong>
                                 <span>{mode.swath_km !== null ? `${mode.swath_km} км` : '—'}</span>
@@ -276,7 +279,7 @@ export default function SatellitesPage() {
                                     ? `${mode.spatial_resolution_m} м`
                                     : '—'}
                                 </span>
-                                <span>{formatOffNadir(mode.max_off_nadir_deg)}</span>
+                                {/* <span>{formatOffNadir(mode.max_off_nadir_deg)}</span> */}
                               </div>
                             ))}
                           </div>
@@ -294,7 +297,7 @@ export default function SatellitesPage() {
 
                                 <span>{formatBandRange(band)}</span>
 
-                                <strong>{formatBandResolution(band)}</strong>
+                                <strong>{getBandResolutionDisplay(sensor, band)}</strong>
 
                                 <small>{formatBandType(band.band_type)}</small>
                               </div>
@@ -318,6 +321,76 @@ export default function SatellitesPage() {
       </section>
     </main>
   )
+}
+
+type SensorMode = Sensor['modes'][number]
+
+function getActiveModes(sensor: Sensor) {
+  return (sensor.modes ?? []).filter((mode) => mode.is_active !== false)
+}
+
+function isSarSensor(sensor: Sensor) {
+  const sensorName = sensor.name?.toLowerCase() ?? ''
+  const sensorType = sensor.sensor_type?.toLowerCase() ?? ''
+
+  return (
+    sensorName.includes('sar') ||
+    sensorType.includes('sar') ||
+    sensorType.includes('radar') ||
+    sensorType.includes('радиолока')
+  )
+}
+
+function getSensorSwathDisplay(sensor: Sensor, defaultMode: SensorMode | null) {
+  if (isSarSensor(sensor)) {
+    const swathValues = getActiveModes(sensor)
+      .map((mode) => mode.swath_km)
+      .filter((value): value is number => value !== null && value !== undefined)
+
+    if (swathValues.length === 0) {
+      return '—'
+    }
+
+    const minSwath = Math.min(...swathValues)
+    const maxSwath = Math.max(...swathValues)
+
+    return minSwath === maxSwath ? `${minSwath} км` : `${minSwath}–${maxSwath} км`
+  }
+
+  if (defaultMode?.swath_km !== null && defaultMode?.swath_km !== undefined) {
+    return `${defaultMode.swath_km} км`
+  }
+
+  return sensor.swath_km !== null && sensor.swath_km !== undefined
+    ? `${sensor.swath_km} км`
+    : '—'
+}
+
+function getSensorBestResolutionDisplay(
+  sensor: Sensor,
+  bestResolution: number | null,
+) {
+  if (isSarSensor(sensor)) {
+    const resolutionValues = getActiveModes(sensor)
+      .map((mode) => mode.spatial_resolution_m)
+      .filter((value): value is number => value !== null && value !== undefined)
+
+    if (resolutionValues.length === 0) {
+      return '—'
+    }
+
+    return `${Math.min(...resolutionValues)} м`
+  }
+
+  return bestResolution !== null ? `${bestResolution} м` : '—'
+}
+
+function getBandResolutionDisplay(sensor: Sensor, band: SensorBand) {
+  if (isSarSensor(sensor)) {
+    return 'по режимам'
+  }
+
+  return formatBandResolution(band)
 }
 
 function getDetailedBands(sensor: Sensor) {

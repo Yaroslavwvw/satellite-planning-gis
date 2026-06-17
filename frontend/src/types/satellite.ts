@@ -54,4 +54,5 @@ export type SensorMode = {
   max_off_nadir_deg: number | null
   is_default: boolean
   description: string | null
+  is_active?: boolean
 }
