@@ -79,8 +79,19 @@ function formatDateTime(value: string) {
 }
 
 function formatDuration(seconds: number) {
-  const minutes = Math.round(seconds / 60)
-  return `${minutes} мин`
+  const safeSeconds = Math.max(0, Math.round(seconds))
+  const minutes = Math.floor(safeSeconds / 60)
+  const restSeconds = safeSeconds % 60
+
+  if (minutes === 0) {
+    return `${restSeconds} сек`
+  }
+
+  if (restSeconds === 0) {
+    return `${minutes} мин`
+  }
+
+  return `${minutes} мин ${restSeconds} сек`
 }
 
 function formatCoverage(value: number | null | undefined) {
@@ -1177,10 +1188,11 @@ function ObservationWindowsTable({
                     {item.sar_min_look_angle_deg == null && item.requires_pointing && (
                       <div
                         className="result-pointing-badge"
-                        title={`AOI находится в зоне возможного наведения. Требуемый угол: ${formatAngleRange(
-                          item.required_off_nadir_deg,
-                          item.required_off_nadir_max_deg,
-                        )}, максимум сценария: ${formatAngle(item.max_off_nadir_deg)}`}
+                        title={`AOI находится в зоне возможного наведения`}
+                        // title={`AOI находится в зоне возможного наведения. Требуемый угол: ${formatAngleRange(
+                        //   item.required_off_nadir_deg,
+                        //   item.required_off_nadir_max_deg,
+                        // )}, максимум сценария: ${formatAngle(item.max_off_nadir_deg)}`}
                       >
                         требуется наведение
                       </div>

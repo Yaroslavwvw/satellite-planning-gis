@@ -70,8 +70,21 @@ export function getAoiTimeZone(
   }
 }
 
+export function parseUtcDateTime(value: string | Date): Date {
+  if (value instanceof Date) {
+    return value
+  }
+
+  const normalizedValue = value.trim()
+
+  const hasTimezone =
+    normalizedValue.endsWith('Z') || /[+-]\d{2}:\d{2}$/.test(normalizedValue)
+
+  return new Date(hasTimezone ? normalizedValue : `${normalizedValue}Z`)
+}
+
 export function formatUtcDateTime(value: string | Date): string {
-  const date = new Date(value)
+  const date = parseUtcDateTime(value)
 
   return new Intl.DateTimeFormat('ru-RU', {
     timeZone: 'UTC',
@@ -87,7 +100,7 @@ export function formatAoiLocalDateTime(
   value: string | Date,
   timeZone: string,
 ): string {
-  const date = new Date(value)
+  const date = parseUtcDateTime(value)
 
   return new Intl.DateTimeFormat('ru-RU', {
     timeZone,

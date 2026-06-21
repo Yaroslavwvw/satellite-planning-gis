@@ -315,8 +315,8 @@ export default function MainPage() {
 
       const calculation = await createCalculation({
         aoi_id: aoi.aoi_id,
-        period_start: `${values.periodStart}T00:00:00`,
-        period_end: `${values.periodEnd}T00:00:00`,
+        period_start: `${values.periodStart}T00:00:00Z`,
+        period_end: `${values.periodEnd}T00:00:00Z`,
         step_seconds: values.stepSeconds,
         mode: values.mode,
         satellite_ids: values.mode === 'selected' ? values.satelliteIds : [],
