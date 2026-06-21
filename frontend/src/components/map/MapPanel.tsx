@@ -364,6 +364,10 @@ export default function MapPanel({
           <span className="legend-box footprint" />
           Зоны покрытия сенсоров
         </div>
+        <div>
+          <span className="legend-box reachable-footprint" />
+          Расширенный буфер покрытия
+        </div>
       </div>
     </section>
   )

@@ -53,7 +53,27 @@ type Props = {
 }
 
 function formatDate(date: Date) {
-  return date.toISOString().slice(0, 10)
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+
+  return `${year}-${month}-${day}`
+}
+
+function addDays(date: Date, days: number) {
+  const result = new Date(date)
+
+  // Полдень защищает от случайного сдвига даты при переходах времени.
+  result.setHours(12, 0, 0, 0)
+  result.setDate(result.getDate() + days)
+
+  return result
+}
+
+function addDaysToInputDate(value: string, days: number) {
+  return formatDate(
+    addDays(new Date(`${value}T12:00:00`), days),
+  )
 }
 
 function getTodayDate() {
@@ -61,9 +81,21 @@ function getTodayDate() {
 }
 
 function getDefaultEndDate() {
-  const date = new Date()
-  date.setDate(date.getDate() + 2)
-  return formatDate(date)
+  return formatDate(addDays(new Date(), 2))
+}
+
+function getMaximumStartDate() {
+  return formatDate(addDays(new Date(), 6))
+}
+
+function getMaximumEndDate() {
+  return formatDate(addDays(new Date(), 7))
+}
+
+function formatDateLabel(value: string) {
+  const [year, month, day] = value.split('-')
+
+  return `${day}.${month}.${year}`
 }
 
 export default function CalculationSidebar({
@@ -84,11 +116,21 @@ export default function CalculationSidebar({
   onClearAoi,
   onNewCalculation,
 }: Props) {
-  const todayInputValue = useMemo(() => getTodayDate(), [])
+  const dateLimits = useMemo(
+    () => ({
+      today: getTodayDate(),
+      maximumStart: getMaximumStartDate(),
+      maximumEnd: getMaximumEndDate(),
+    }),
+    [],
+  )
 
   const [aoiName, setAoiName] = useState('')
   const [periodStart, setPeriodStart] = useState(getTodayDate)
   const [periodEnd, setPeriodEnd] = useState(getDefaultEndDate)
+  const minimumEndDate = periodStart
+    ? addDaysToInputDate(periodStart, 1)
+    : dateLimits.today
   const [stepSeconds, setStepSeconds] = useState(60)
   const [mode, setMode] = useState<'all_catalog' | 'selected'>('all_catalog')
   const [satelliteIds, setSatelliteIds] = useState<number[]>([])
@@ -174,11 +216,41 @@ export default function CalculationSidebar({
     })
   }
 
+  function handlePeriodStartChange(value: string) {
+    setPeriodStart(value)
+
+    if (!value) {
+      return
+    }
+
+    const nextAllowedEndDate = addDaysToInputDate(value, 1)
+
+    if (!periodEnd || periodEnd < nextAllowedEndDate) {
+      setPeriodEnd(nextAllowedEndDate)
+    }
+  }
+
   function handleSubmit() {
     const currentToday = getTodayDate()
 
     if (periodStart < currentToday) {
       alert('Дата начала расчёта не может быть раньше текущего дня')
+      return
+    }
+
+    if (periodStart > dateLimits.maximumStart) {
+      alert(
+        'Дата начала расчёта должна быть не позже шестого дня от текущей даты',
+      )
+      return
+    }
+
+    if (periodEnd > dateLimits.maximumEnd) {
+      alert(
+        `Дата окончания расчёта не может быть позже ${formatDateLabel(
+          dateLimits.maximumEnd,
+        )}`,
+      )
       return
     }
 
@@ -259,22 +331,28 @@ export default function CalculationSidebar({
       <div className="section-title">Период расчёта</div>
 
       <label htmlFor="periodStart">Дата начала</label>
-      <input
-        id="periodStart"
-        type="date"
-        value={periodStart}
-        min={todayInputValue}
-        onChange={(event) => setPeriodStart(event.target.value)}
-      />
+        <input
+          id="periodStart"
+          type="date"
+          value={periodStart}
+          min={dateLimits.today}
+          max={dateLimits.maximumStart}
+          onChange={(event) => handlePeriodStartChange(event.target.value)}
+        />
 
-      <label htmlFor="periodEnd">Дата окончания</label>
-      <input
-        id="periodEnd"
-        type="date"
-        value={periodEnd}
-        min={periodStart}
-        onChange={(event) => setPeriodEnd(event.target.value)}
-      />
+        <label htmlFor="periodEnd">Дата окончания</label>
+        <input
+          id="periodEnd"
+          type="date"
+          value={periodEnd}
+          min={minimumEndDate}
+          max={dateLimits.maximumEnd}
+          onChange={(event) => setPeriodEnd(event.target.value)}
+        />
+
+        <div className="hint">
+          Расчёт доступен до {formatDateLabel(dateLimits.maximumEnd)} включительно
+        </div>
 
       <div className="hint">Максимальный период: 7 суток</div>
 

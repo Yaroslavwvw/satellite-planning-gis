@@ -205,61 +205,160 @@ function getWindowCalculationResolutionM(
   return getAnalysisResolutionM(filters, sensor)
 }
 
-function buildCsv(
+type CsvCell = string | number | boolean | null | undefined
+
+function escapeCsvCell(value: CsvCell): string {
+  return `"${String(value ?? '').replace(/"/g, '""')}"`
+}
+
+function buildCsvDocument(
+  header: CsvCell[],
+  rows: CsvCell[][],
+): string {
+  return [header, ...rows]
+    .map((row) => row.map(escapeCsvCell).join(';'))
+    .join('\r\n')
+}
+
+function getSarLookDirectionLabel(
+  value: string | null | undefined,
+): string {
+  if (value === 'left') {
+    return 'левая'
+  }
+
+  if (value === 'right') {
+    return 'правая'
+  }
+
+  if (value === 'both') {
+    return 'обе'
+  }
+
+  return ''
+}
+
+function formatCsvPercent(
+  value: number | null | undefined,
+): string {
+  if (value == null || !Number.isFinite(value)) {
+    return ''
+  }
+
+  return `${value.toFixed(1).replace('.', ',')}%`
+}
+
+function getExpandedCoverageCsvValue(
+  item: ObservationWindow,
+): string {
+  const isSarWindow =
+    item.sar_min_look_angle_deg != null &&
+    item.sar_max_look_angle_deg != null
+
+  const hasExpandedCoverage =
+    item.requires_pointing || isSarWindow
+
+  if (!hasExpandedCoverage) {
+    return ''
+  }
+
+  return formatCsvPercent(item.reachable_coverage_percent)
+}
+
+function buildObservationWindowsCsv(
   windows: ObservationWindow[],
   sensorById: Map<number, Sensor>,
   filters: ObservationFilters,
-) {
+  aoiTimeZone: string,
+): string {
   const showUsedBands = hasUsedBands(filters)
 
-  const header = [
+  const header: CsvCell[] = [
+    'ID окна',
     'Спутник',
     'Сенсор',
-    'Режим съемки',
+    'Режим съёмки',
     'Полоса, км',
-    'Начало окна',
-    'Конец окна',
+    'Начало UTC',
+    'Конец UTC',
+    'Начало местное',
+    'Конец местное',
+    'Часовой пояс AOI',
     'Длительность, сек',
-    'Покрытие AOI, %',
-    'Доступно при наведении, %',
+    'Покрытие AOI',
+    'Расширенное покрытие AOI',
     'Требуется наведение',
-    'Требуемый угол, град',
-    'Макс. угол режима, град',
-    'Разрешение анализа, м',
+    'Максимальный допустимый угол, град',
+    'SAR: минимальный угол, град',
+    'SAR: максимальный угол, град',
+    'SAR: сторона обзора',
+    'Дневное окно',
+    'Разрешение анализа',
     ...(showUsedBands ? ['Используемые каналы'] : []),
   ]
 
-  const rows = windows.map((item) => {
+  const rows: CsvCell[][] = windows.map((item) => {
     const sensor = sensorById.get(item.sensor_id)
-    const resolutionRange = getWindowResolutionRange(filters, sensor)
 
     return [
+      item.window_id,
       item.satellite_name,
       item.sensor_name,
       getSensorModeLabel(item.sensor_mode_name),
-      item.swath_km != null ? String(item.swath_km) : '',
-      item.access_start,
-      item.access_end,
-      String(item.duration_sec),
-      item.coverage_percent != null ? String(item.coverage_percent) : '',
-      item.reachable_coverage_percent != null
-        ? String(item.reachable_coverage_percent)
-        : '',
+      item.swath_km,
+      formatUtcDateTime(item.access_start),
+      formatUtcDateTime(item.access_end),
+      formatAoiLocalDateTime(item.access_start, aoiTimeZone),
+      formatAoiLocalDateTime(item.access_end, aoiTimeZone),
+      aoiTimeZone,
+      item.duration_sec,
+      formatCsvPercent(item.coverage_percent),
+      getExpandedCoverageCsvValue(item),
       item.requires_pointing ? 'да' : 'нет',
-      item.required_off_nadir_deg != null
-        ? String(item.required_off_nadir_deg)
-        : '',
-      item.max_off_nadir_deg != null ? String(item.max_off_nadir_deg) : '',
-      resolutionRange,
-      ...(showUsedBands ? [getMatchingBandLines(filters, sensor).join(' | ')] : []),
+      item.max_off_nadir_deg,
+      item.sar_min_look_angle_deg,
+      item.sar_max_look_angle_deg,
+      getSarLookDirectionLabel(item.sar_look_direction),
+      item.is_daylight == null
+        ? ''
+        : item.is_daylight
+          ? 'да'
+          : 'нет',
+      getWindowResultResolutionLabel(item, filters, sensor),
+      ...(showUsedBands
+        ? [getMatchingBandLines(filters, sensor).join(' | ')]
+        : []),
     ]
   })
 
-  return [header, ...rows]
-    .map((row) =>
-      row.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(';'),
-    )
-    .join('\n')
+  return buildCsvDocument(header, rows)
+}
+
+function buildSatelliteSummaryCsv(
+  satellites: SatelliteSummary[],
+  aoiTimeZone: string,
+): string {
+  const header: CsvCell[] = [
+    'Спутник',
+    'Сенсоры',
+    'Количество окон наблюдения',
+    'Ближайшее окно UTC',
+    'Ближайшее окно местное',
+    'Часовой пояс AOI',
+    'Среднее покрытие',
+  ]
+
+  const rows: CsvCell[][] = satellites.map((item) => [
+    item.satellite_name,
+    item.sensors,
+    item.windows_count,
+    formatUtcDateTime(item.nearest_window),
+    formatAoiLocalDateTime(item.nearest_window, aoiTimeZone),
+    aoiTimeZone,
+    item.avg_coverage,
+  ])
+
+  return buildCsvDocument(header, rows)
 }
 
 type ResultPanelFilters = {
@@ -547,9 +646,7 @@ export default function ResultsPanel({
       const existing = map.get(item.satellite_id)
       const hasCoverage =
         item.coverage_percent !== null && item.coverage_percent !== undefined
-      const sensorLabel = `${item.sensor_name} / ${getSensorModeLabel(
-        item.sensor_mode_name,
-      )}`
+      const sensorLabel = item.sensor_name
 
       if (!existing) {
         map.set(item.satellite_id, {
@@ -598,21 +695,59 @@ export default function ResultsPanel({
     navigator.clipboard.writeText(url)
   }
 
-  function exportCsv() {
-    if (!result || filteredWindows.length === 0) return
+  function sanitizeFileName(value: string): string {
+    const normalized = value
+      .trim()
+      .replace(/[<>:"/\\|?*\u0000-\u001F]/g, '-')
+      .replace(/\s+/g, '_')
+      .replace(/-+/g, '-')
+      .replace(/^[-_.]+|[-_.]+$/g, '')
 
-    const csv = buildCsv(filteredWindows, sensorById, filters)
-    const blob = new Blob([csv], {
+    return normalized || 'AOI'
+  }
+
+  function exportCsv() {
+    if (!result || filteredWindows.length === 0) {
+      return
+    }
+
+    const isSatelliteExport = activeTab === 'satellites'
+
+    const csv = isSatelliteExport
+      ? buildSatelliteSummaryCsv(
+          satelliteSummaries,
+          aoiTimeZone,
+        )
+      : buildObservationWindowsCsv(
+          filteredWindows,
+          sensorById,
+          filters,
+          aoiTimeZone,
+        )
+
+    const blob = new Blob([`\uFEFF${csv}`], {
       type: 'text/csv;charset=utf-8;',
     })
 
-    const calculationId = result.calculation_run.calculation_run_id
+    const calculationId =
+      result.calculation_run.calculation_run_id
+
+    const aoiName = sanitizeFileName(result.aoi.name)
+
+    const fileSuffix = isSatelliteExport
+      ? 'satellites'
+      : 'observation-windows'
+
     const url = URL.createObjectURL(blob)
     const link = document.createElement('a')
 
     link.href = url
-    link.download = `calculation-${calculationId}-observation-windows.csv`
+    link.download =
+    `calculation-${calculationId}-${aoiName}-${fileSuffix}.csv`
+
+    document.body.appendChild(link)
     link.click()
+    link.remove()
 
     URL.revokeObjectURL(url)
   }

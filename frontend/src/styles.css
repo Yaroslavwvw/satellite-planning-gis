@@ -1375,6 +1375,14 @@ button {
   border-radius: 3px;
 }
 
+.legend-box.reachable-footprint {
+  width: 16px;
+  height: 12px;
+  border: 2px dashed #4f9d69;
+  background: rgba(79, 157, 105, 0.05);
+  border-radius: 3px;
+}
+
 .result-row {
   cursor: pointer;
 }
@@ -1940,4 +1948,26 @@ button {
 
 .sidebar-filters-dropdown label {
   margin-top: 4px;
+}
+
+.help-modal {
+  max-height: calc(100vh - 48px);
+  display: flex;
+  flex-direction: column;
+}
+
+.help-modal .modal-header {
+  flex: 0 0 auto;
+}
+
+.help-modal .modal-content {
+  overflow-y: auto;
+}
+
+.help-content h3 {
+  margin-top: 0;
+}
+
+.help-content p:last-child {
+  margin-bottom: 0;
 }

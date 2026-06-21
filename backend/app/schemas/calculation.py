@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -48,11 +48,29 @@ class CalculationCreate(BaseModel):
         if period_start is None:
             return period_end
 
-        if period_end <= period_start:
-            raise ValueError("period_end must be greater than period_start")
+        current_date = datetime.now().date()
+        maximum_end_date = current_date + timedelta(days=7)
+        maximum_start_date = maximum_end_date - timedelta(days=1)
 
-        if (period_end - period_start).days > 7:
-            raise ValueError("calculation period must not exceed 7 days")
+        if period_start.date() < current_date:
+            raise ValueError(
+                "period_start cannot be earlier than current date"
+            )
+
+        if period_start.date() > maximum_start_date:
+            raise ValueError(
+                "period_start cannot be later than 6 days from current date"
+            )
+
+        if period_end <= period_start:
+            raise ValueError(
+                "period_end must be greater than period_start"
+            )
+
+        if period_end.date() > maximum_end_date:
+            raise ValueError(
+                "period_end cannot be later than 7 days from current date"
+            )
 
         return period_end
 
