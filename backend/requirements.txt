@@ -10,5 +10,5 @@ sgp4==2.24
 numpy==2.3.2
 shapely==2.1.1
 skyfield
-
+pyproj==3.7.2
 
