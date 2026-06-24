@@ -12,7 +12,12 @@ import {
   fetchWindowMapLayer,
 } from '../api/calculations'
 import { fetchSatelliteSensors, fetchSatellites } from '../api/satellites'
-import { updateTle } from '../api/tle'
+import {
+  ensureCurrentTle,
+  fetchTleStatus,
+  updateTle,
+  type TleStatusResponse,
+} from '../api/tle'
 import { useCalculationContext } from '../context/CalculationContext'
 import type { GeoJsonPolygon } from '../api/aois'
 import type { WindowMapLayerResponse } from '../types/calculation'
@@ -100,6 +105,35 @@ function clearMapSessionState() {
   }
 }
 
+function parseBackendUtcDate(value: string): Date {
+  const normalized = value.trim()
+
+  const hasTimezone =
+    normalized.endsWith('Z') ||
+    /[+-]\d{2}:\d{2}$/.test(normalized)
+
+  return new Date(
+    hasTimezone ? normalized : `${normalized}Z`,
+  )
+}
+
+function formatTleDateTime(
+  value: string | null | undefined,
+): string | null {
+  if (!value) {
+    return null
+  }
+
+  return `${new Intl.DateTimeFormat('ru-RU', {
+    timeZone: 'UTC',
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(parseBackendUtcDate(value))} UTC`
+}
+
 export default function MainPage() {
   const {
     currentResult,
@@ -121,15 +155,81 @@ export default function MainPage() {
   const [isResultsCollapsed, setIsResultsCollapsed] = useState(false)
   const [sidebarResetKey, setSidebarResetKey] = useState(0)
 
-  const [lastTleUpdate, setLastTleUpdate] = useState<string | null>(() => {
-    return sessionStorage.getItem('satellitePlanning.lastTleUpdate')
-  })
+  const [tleStatus, setTleStatus] =
+  useState<TleStatusResponse | null>(null)
 
   const [aoiPoints, setAoiPoints] = useState<AoiPoint[]>([])
   const [activeWindowLayers, setActiveWindowLayers] = useState<
     WindowMapLayerResponse[]
   >([])
   const [isLoadingWindowLayer, setIsLoadingWindowLayer] = useState(false)
+
+
+  useEffect(() => {
+  let isActive = true
+
+  async function initializeTle() {
+    try {
+      setIsUpdatingTle(true)
+
+      const response = await ensureCurrentTle({
+        satellite_ids: null,
+      })
+
+      if (!isActive) {
+        return
+      }
+
+      setTleStatus(response)
+
+      if (response.updated_records > 0) {
+        setMessage(
+          `TLE автоматически обновлены: ${response.updated_records} записей`,
+        )
+      } else if (response.is_stale) {
+        setMessage(
+          'Не удалось получить актуальные TLE. Используются последние сохранённые данные.',
+        )
+      }
+    } catch (error) {
+      console.error(error)
+
+      if (isActive) {
+        setMessage(
+          'Не удалось проверить актуальность TLE',
+        )
+      }
+    } finally {
+      if (isActive) {
+        setIsUpdatingTle(false)
+      }
+    }
+  }
+
+  async function refreshTleStatus() {
+    try {
+      const status = await fetchTleStatus()
+
+      if (isActive) {
+        setTleStatus(status)
+      }
+    } catch (error) {
+      console.error(error)
+    }
+  }
+
+  initializeTle()
+
+  const statusTimer = window.setInterval(
+    refreshTleStatus,
+    60_000,
+  )
+
+  return () => {
+    isActive = false
+    window.clearInterval(statusTimer)
+  }
+}, [])
 
   useEffect(() => {
     const calculationRunId = currentResult?.calculation_run.calculation_run_id
@@ -341,15 +441,23 @@ export default function MainPage() {
   async function handleUpdateTle() {
     try {
       setIsUpdatingTle(true)
-      setMessage('Обновление TLE...')
+      setMessage('Принудительное обновление TLE...')
 
-      const response = await updateTle({ satellite_ids: null })
+      const response = await updateTle({
+        satellite_ids: null,
+      })
 
-      setMessage(`TLE обновлены: ${response.updated_records} записей`)
+      setTleStatus(response)
 
-      const updatedAt = new Date().toLocaleString('ru-RU')
-      setLastTleUpdate(updatedAt)
-      sessionStorage.setItem('satellitePlanning.lastTleUpdate', updatedAt)
+      if (response.updated_records > 0) {
+        setMessage(
+          `TLE обновлены: ${response.updated_records} записей`,
+        )
+      } else {
+        setMessage(
+          'Новые TLE не были получены. Используются последние сохранённые данные.',
+        )
+      }
     } catch (error) {
       console.error(error)
       setMessage('Ошибка обновления TLE')
@@ -357,6 +465,25 @@ export default function MainPage() {
       setIsUpdatingTle(false)
     }
   }
+
+  const tleUpdateIsRunning =
+    isUpdatingTle || Boolean(tleStatus?.is_updating)
+
+  const lastTleUpdate = formatTleDateTime(
+    tleStatus?.last_updated_at,
+  )
+
+  const nextTleUpdate = formatTleDateTime(
+    tleStatus?.next_update_at,
+  )
+
+  const tleStatusText = tleUpdateIsRunning
+    ? 'Обновление...'
+    : tleStatus == null
+      ? 'Проверка...'
+      : tleStatus.is_stale
+        ? 'Требуется обновление'
+        : 'Актуальны'
 
   return (
     <MainLayout
@@ -367,8 +494,10 @@ export default function MainPage() {
           satellites={satellites}
           isLoadingSatellites={isLoadingSatellites}
           isCalculating={isCalculating}
-          isUpdatingTle={isUpdatingTle}
+          isUpdatingTle={tleUpdateIsRunning}
           lastTleUpdate={lastTleUpdate}
+          nextTleUpdate={nextTleUpdate}
+          tleStatusText={tleStatusText}
           currentAoiName={currentResult?.aoi?.name ?? null}
           currentCalculationRun={currentResult?.calculation_run ?? null}
           currentCalculationSatelliteIds={currentResult?.satellite_ids ?? []}

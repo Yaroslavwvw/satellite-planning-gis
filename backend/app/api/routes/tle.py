@@ -1,81 +1,96 @@
-# from fastapi import APIRouter, Depends
-# from sqlalchemy.orm import Session
-
-# from app.core.database import get_db
-# from app.schemas.tle import TLEUpdateRequest, TLEUpdateResponse
-# from app.services.tle_loader import parse_tle_lines, read_satellites_for_update, request_tle_by_norad, save_tle_record
-
-# router = APIRouter(prefix="/api/tle", tags=["tle"])
-
-
-# @router.post("/update", response_model=TLEUpdateResponse)
-# async def update_tle(payload: TLEUpdateRequest, db: Session = Depends(get_db)):
-#     satellites = read_satellites_for_update(db, payload.satellite_ids)
-#     details: list[str] = []
-#     updated = 0
-
-#     for satellite in satellites:
-#         try:
-#             raw_tle = await request_tle_by_norad(satellite.norad_id)
-#             parsed = parse_tle_lines(raw_tle)
-#             if parsed is None:
-#                 details.append(f"{satellite.name}: invalid TLE format")
-#                 continue
-#             save_tle_record(db, satellite.id, parsed)
-#             updated += 1
-#             details.append(f"{satellite.name}: updated")
-#         except Exception as exc:  # safe skeleton, detailed handling can be refined later
-#             details.append(f"{satellite.name}: failed ({exc.__class__.__name__})")
-
-#     db.commit()
-#     return TLEUpdateResponse(updated_records=updated, details=details)
-
-
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.schemas.tle import TLEUpdateRequest, TLEUpdateResponse
+from app.schemas.tle import (
+    TLEStatusResponse,
+    TLEUpdateRequest,
+    TLEUpdateResponse,
+)
 from app.services.tle_loader import (
-    parse_tle_lines,
-    read_satellites_for_update,
-    request_tle_by_norad,
-    save_tle_record,
+    get_tle_catalog_status,
+    is_tle_update_in_progress,
+    update_tle_catalog,
 )
 
-router = APIRouter(prefix="/api/tle", tags=["tle"])
+
+router = APIRouter(
+    prefix="/api/tle",
+    tags=["tle"],
+)
 
 
-@router.post("/update", response_model=TLEUpdateResponse)
+def build_status_response(
+    db: Session,
+) -> TLEStatusResponse:
+    status = get_tle_catalog_status(db)
+
+    return TLEStatusResponse(
+        source_name="CelesTrak",
+        last_updated_at=status.last_updated_at,
+        next_update_at=status.next_update_at,
+        is_stale=status.is_stale,
+        is_updating=is_tle_update_in_progress(),
+        current_records=status.current_records,
+        total_satellites=status.total_satellites,
+    )
+
+
+def build_update_response(
+    result,
+) -> TLEUpdateResponse:
+    return TLEUpdateResponse(
+        source_name="CelesTrak",
+        last_updated_at=result.status.last_updated_at,
+        next_update_at=result.status.next_update_at,
+        is_stale=result.status.is_stale,
+        is_updating=is_tle_update_in_progress(),
+        current_records=result.status.current_records,
+        total_satellites=result.status.total_satellites,
+        updated_records=result.updated_records,
+        details=result.details,
+    )
+
+
+@router.get(
+    "/status",
+    response_model=TLEStatusResponse,
+)
+def get_tle_status(
+    db: Session = Depends(get_db),
+):
+    return build_status_response(db)
+
+
+@router.post(
+    "/ensure-current",
+    response_model=TLEUpdateResponse,
+)
+async def ensure_current_tle(
+    payload: TLEUpdateRequest,
+    db: Session = Depends(get_db),
+):
+    result = await update_tle_catalog(
+        db,
+        satellite_ids=payload.satellite_ids,
+        force=False,
+    )
+
+    return build_update_response(result)
+
+
+@router.post(
+    "/update",
+    response_model=TLEUpdateResponse,
+)
 async def update_tle(
     payload: TLEUpdateRequest,
     db: Session = Depends(get_db),
 ):
-    satellites = read_satellites_for_update(db, payload.satellite_ids)
-
-    details: list[str] = []
-    updated = 0
-
-    for satellite in satellites:
-        try:
-            raw_tle = await request_tle_by_norad(satellite.norad_id)
-            parsed = parse_tle_lines(raw_tle)
-
-            if parsed is None:
-                details.append(f"{satellite.name}: invalid TLE format")
-                continue
-
-            save_tle_record(db, satellite.satellite_id, parsed)
-
-            updated += 1
-            details.append(f"{satellite.name}: updated")
-
-        except Exception as exc:
-            details.append(f"{satellite.name}: failed ({exc.__class__.__name__})")
-
-    db.commit()
-
-    return TLEUpdateResponse(
-        updated_records=updated,
-        details=details,
+    result = await update_tle_catalog(
+        db,
+        satellite_ids=payload.satellite_ids,
+        force=True,
     )
+
+    return build_update_response(result)

@@ -40,6 +40,8 @@ type Props = {
   isCalculating: boolean
   isUpdatingTle: boolean
   lastTleUpdate: string | null
+  nextTleUpdate: string | null
+  tleStatusText: string
   currentAoiName: string | null
   currentCalculationRun: CalculationRun | null
   currentCalculationSatelliteIds: number[]
@@ -105,6 +107,8 @@ export default function CalculationSidebar({
   isCalculating,
   isUpdatingTle,
   lastTleUpdate,
+  nextTleUpdate,
+  tleStatusText,
   currentAoiName,
   currentCalculationRun,
   currentCalculationSatelliteIds,
@@ -630,8 +634,22 @@ export default function CalculationSidebar({
         </div>
 
         <div>
+          <span>Статус TLE</span>
+          <strong>{tleStatusText}</strong>
+        </div>
+
+        <div>
           <span>Последнее обновление</span>
-          <strong>{lastTleUpdate ?? 'Не обновлялось в текущей сессии'}</strong>
+          <strong>
+            {lastTleUpdate ?? 'Данные ещё не загружены'}
+          </strong>
+        </div>
+
+        <div>
+          <span>Следующее обновление</span>
+          <strong>
+            {nextTleUpdate ?? 'После первой загрузки'}
+          </strong>
         </div>
 
         <div>

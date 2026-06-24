@@ -51,10 +51,24 @@ function AppContent() {
   return (
     <div className="app-shell">
       <header className="top-header">
-        <div className="brand">
-          <span className="brand-icon">✣</span>
-          <span>ГИС-ДЗЗ</span>
-          <span className="brand-subtitle">Система планирования съёмки</span>
+        <div className="app-brand">
+          <div className="app-brand-icon">
+            <img
+              src={`${import.meta.env.BASE_URL}satellite-logo.png`}
+              alt="Логотип геопортала"
+              className="app-brand-logo"
+            />
+          </div>
+
+          <div className="app-brand-name">
+            <span className="app-brand-title">
+              Геопортал для планирования съёмочных мероприятий
+            </span>
+
+            <span className="app-brand-subtitle">
+              спутниками ДЗЗ
+            </span>
+          </div>
         </div>
 
         <nav className="top-nav">
